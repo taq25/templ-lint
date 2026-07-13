@@ -1,0 +1,17 @@
+package testdata
+
+// 危険パターンの網羅サンプル (テスト用)
+templ Dangerous(userInput string, userURL string, attrs templ.Attributes) {
+	@templ.Raw(userInput)
+	<a href={ templ.SafeURL(userURL) }>link</a>
+	<div x-data={ userInput }>alpine data</div>
+	<div x-init={ userInput }>alpine init</div>
+	<button @click={ userInput }>go</button>
+	<button x-on:click={ userInput }>go2</button>
+	<button hx-on:click={ userInput }>hx</button>
+	<div hx-get={ userURL }>load</div>
+	<div hx-vals={ userInput }>vals</div>
+	<div { attrs... }>spread</div>
+	{{ raw := templ.Raw(userInput) }}
+	@raw
+}

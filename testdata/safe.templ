@@ -1,0 +1,16 @@
+package testdata
+
+import "github.com/microcosm-cc/bluemonday"
+
+// 安全パターンのサンプル (テスト用): すべて検出されないこと
+templ Safe(name string, userHTML string, userURL string) {
+	<div x-data="{ open: false }">
+		<button @click="open = !open">toggle</button>
+	</div>
+	<div hx-get="/api/items" hx-on:click="console.log('ok')">load</div>
+	<p>{ name }</p>
+	@templ.Raw("<hr/>")
+	@templ.Raw(bluemonday.UGCPolicy().Sanitize(userHTML))
+	@templ.Raw(sanitize.HTML(userHTML))
+	<a href={ templ.URL(userURL) }>ok</a>
+}
