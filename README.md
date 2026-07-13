@@ -106,7 +106,9 @@ Exit codes: `0` no findings / `1` findings (ERROR always; WARNING only with
 @templ.Raw(sanitize.HTML(userHTML))
 ```
 
-The recommended wrapper keeps the bluemonday policy in one reviewable place:
+The recommended wrapper keeps the bluemonday policy in one reviewable place.
+A complete, compiling, tested reference lives in
+[examples/sanitize](examples/sanitize/sanitize.go); the essence is:
 
 ```go
 // internal/sanitize/sanitize.go
@@ -114,10 +116,19 @@ package sanitize
 
 import "github.com/microcosm-cc/bluemonday"
 
+// Built once, reused; bluemonday policies are safe for concurrent use.
+// UGCPolicy allows common formatting tags while stripping <script>, event
+// handler attributes, and javascript: URLs.
 var ugc = bluemonday.UGCPolicy()
 
-func HTML(s string) string { return ugc.Sanitize(s) }
+func HTML(unsafe string) string { return ugc.Sanitize(unsafe) }
 ```
+
+Do **not** blanket-allow `hx-*` / `x-*` attributes in the policy for
+user-authored HTML — the frontend executes them, which would reintroduce the
+exact XSS this linter prevents. The linter checks the *shape*
+`templ.Raw(sanitize.HTML(x))`; it does **not** verify the policy is correct —
+that is what this wrapper and its tests are for.
 
 Note: `p.Sanitize(x)` on a stored policy variable is **not** allowed — the AST
 cannot verify that `p` is a bluemonday policy, and allowing any method named
