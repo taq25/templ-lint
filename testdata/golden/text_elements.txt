@@ -1,0 +1,4 @@
+testdata/elements.templ:6:2: [WARNING] unsafe-target-blank: target="_blank" without rel="noopener": the opened page can control this tab via window.opener (reverse tabnabbing). Add rel="noopener noreferrer"
+testdata/elements.templ:15:2: [WARNING] missing-sri: cross-origin <script src> has no integrity attribute: a compromised CDN can serve arbitrary code. Add a Subresource Integrity hash
+testdata/elements.templ:21:2: [WARNING] missing-sri: cross-origin <link href> has no integrity attribute: a compromised CDN can serve arbitrary code. Add a Subresource Integrity hash
+3 findings

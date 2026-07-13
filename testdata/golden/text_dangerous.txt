@@ -1,0 +1,13 @@
+testdata/dangerous.templ:5:3: [ERROR] escape-bypass: templ.Raw bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal
+testdata/dangerous.templ:6:12: [ERROR] escape-bypass: templ.SafeURL bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal
+testdata/dangerous.templ:7:7: [ERROR] js-eval-attr: dynamic value in "x-data": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute
+testdata/dangerous.templ:8:7: [ERROR] js-eval-attr: dynamic value in "x-init": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute
+testdata/dangerous.templ:9:10: [ERROR] js-eval-attr: dynamic value in "@click": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute
+testdata/dangerous.templ:10:10: [ERROR] js-eval-attr: dynamic value in "x-on:click": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute
+testdata/dangerous.templ:11:10: [ERROR] js-eval-attr: dynamic value in "hx-on:click": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute
+testdata/dangerous.templ:12:7: [WARNING] url-attr: dynamic URL in "hx-get": htmx will send a request to this URL; validate it against an allowlist server-side
+testdata/dangerous.templ:13:7: [ERROR] js-eval-attr: dynamic value in "hx-vals": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute
+testdata/dangerous.templ:14:20: [ERROR] js-eval-attr: dynamic value in "onerror": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute
+testdata/dangerous.templ:15:9: [WARNING] spread-attr: spread attributes: attribute names are dynamic; ensure the map cannot contain event/Alpine/htmx attributes
+testdata/dangerous.templ:16:5: [ERROR] escape-bypass: templ.Raw bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal
+12 findings

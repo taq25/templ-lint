@@ -1,0 +1,98 @@
+[
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 5,
+    "col": 3,
+    "rule": "escape-bypass",
+    "severity": "ERROR",
+    "message": "templ.Raw bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 6,
+    "col": 12,
+    "rule": "escape-bypass",
+    "severity": "ERROR",
+    "message": "templ.SafeURL bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 7,
+    "col": 7,
+    "rule": "js-eval-attr",
+    "severity": "ERROR",
+    "message": "dynamic value in \"x-data\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 8,
+    "col": 7,
+    "rule": "js-eval-attr",
+    "severity": "ERROR",
+    "message": "dynamic value in \"x-init\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 9,
+    "col": 10,
+    "rule": "js-eval-attr",
+    "severity": "ERROR",
+    "message": "dynamic value in \"@click\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 10,
+    "col": 10,
+    "rule": "js-eval-attr",
+    "severity": "ERROR",
+    "message": "dynamic value in \"x-on:click\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 11,
+    "col": 10,
+    "rule": "js-eval-attr",
+    "severity": "ERROR",
+    "message": "dynamic value in \"hx-on:click\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 12,
+    "col": 7,
+    "rule": "url-attr",
+    "severity": "WARNING",
+    "message": "dynamic URL in \"hx-get\": htmx will send a request to this URL; validate it against an allowlist server-side"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 13,
+    "col": 7,
+    "rule": "js-eval-attr",
+    "severity": "ERROR",
+    "message": "dynamic value in \"hx-vals\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 14,
+    "col": 20,
+    "rule": "js-eval-attr",
+    "severity": "ERROR",
+    "message": "dynamic value in \"onerror\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 15,
+    "col": 9,
+    "rule": "spread-attr",
+    "severity": "WARNING",
+    "message": "spread attributes: attribute names are dynamic; ensure the map cannot contain event/Alpine/htmx attributes"
+  },
+  {
+    "file": "testdata/dangerous.templ",
+    "line": 16,
+    "col": 5,
+    "rule": "escape-bypass",
+    "severity": "ERROR",
+    "message": "templ.Raw bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal"
+  }
+]

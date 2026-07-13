@@ -190,9 +190,14 @@ with your application's.
 ## Development
 
 ```bash
-go test ./...    # includes golden tests against testdata/*.templ
+go test ./...              # unit tests + CLI golden tests
+go test -update ./...      # regenerate testdata/golden/*.txt after intended output changes
 go build .
 ```
+
+CLI output is covered by golden tests: the real output is compared against
+stored files in `testdata/golden/`. When you intentionally change a message or
+format, rerun with `-update` and review the diff before committing.
 
 ## License
 

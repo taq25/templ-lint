@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -25,29 +26,35 @@ func (s *stringsFlag) Set(v string) error {
 }
 
 func main() {
-	os.Exit(run())
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run() int {
+// run はテスト可能なエントリポイント。引数・出力先を受け取り、終了コードを返す。
+// グローバルな flag 状態には触れず、独自の FlagSet を使う。
+func run(args []string, stdout, stderr io.Writer) int {
 	var (
 		format      string
 		strict      bool
 		showVersion bool
 		sanitizers  stringsFlag
 	)
-	flag.StringVar(&format, "format", "text", "output format: text | json")
-	flag.BoolVar(&strict, "strict", false, "treat WARNING findings as failures too")
-	flag.BoolVar(&showVersion, "version", false, "print version and exit")
-	flag.Var(&sanitizers, "allow-sanitizer",
+	fs := flag.NewFlagSet("templ-lint", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&format, "format", "text", "output format: text | json")
+	fs.BoolVar(&strict, "strict", false, "treat WARNING findings as failures too")
+	fs.BoolVar(&showVersion, "version", false, "print version and exit")
+	fs.Var(&sanitizers, "allow-sanitizer",
 		"sanitizer allowed as templ.Raw argument in pkg.Func form (e.g. sanitize.HTML); repeatable")
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 
 	if showVersion {
-		fmt.Fprintf(os.Stdout, "templ-lint %s\n", version)
+		fmt.Fprintf(stdout, "templ-lint %s\n", version)
 		return 0
 	}
 
-	paths := flag.Args()
+	paths := fs.Args()
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
@@ -55,7 +62,7 @@ func run() int {
 	l := &lint.Linter{AllowedSanitizers: sanitizers}
 	findings, err := l.LintPaths(paths)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "templ-lint: %v\n", err)
+		fmt.Fprintf(stderr, "templ-lint: %v\n", err)
 		return 2
 	}
 
@@ -64,18 +71,18 @@ func run() int {
 		if findings == nil {
 			findings = []lint.Finding{}
 		}
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(findings); err != nil {
-			fmt.Fprintf(os.Stderr, "templ-lint: %v\n", err)
+			fmt.Fprintf(stderr, "templ-lint: %v\n", err)
 			return 2
 		}
 	default:
 		for _, f := range findings {
-			fmt.Fprintf(os.Stdout, "%s:%d:%d: [%s] %s: %s\n",
+			fmt.Fprintf(stdout, "%s:%d:%d: [%s] %s: %s\n",
 				f.File, f.Line, f.Col, f.Severity, f.Rule, f.Message)
 		}
-		fmt.Fprintf(os.Stdout, "%d findings\n", len(findings))
+		fmt.Fprintf(stdout, "%d findings\n", len(findings))
 	}
 
 	for _, f := range findings {
