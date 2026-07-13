@@ -1,0 +1,24 @@
+package testdata
+
+// 非 XSS の要素レベル脆弱性 (テスト用)
+templ Elements() {
+	// reverse tabnabbing: rel なし → 検出
+	<a href="https://ext.example" target="_blank">bad</a>
+	// rel=noopener あり → 安全
+	<a href="https://ext.example" target="_blank" rel="noopener">ok</a>
+	// rel=noreferrer も noopener を含意 → 安全
+	<a href="https://ext.example" target="_blank" rel="noreferrer">ok</a>
+	// 同一タブ → 対象外
+	<a href="https://ext.example">ok</a>
+
+	// SRI: クロスオリジン script に integrity なし → 検出
+	<script src="https://cdn.example/lib.js"></script>
+	// integrity あり → 安全
+	<script src="https://cdn.example/lib.js" integrity="sha384-xxx"></script>
+	// 同一オリジン (相対パス) → 対象外
+	<script src="/static/app.js"></script>
+	// クロスオリジン stylesheet に integrity なし → 検出
+	<link rel="stylesheet" href="https://cdn.example/style.css"/>
+	// プリロード等の別 rel → 対象外
+	<link rel="preload" href="https://cdn.example/font.woff2"/>
+}

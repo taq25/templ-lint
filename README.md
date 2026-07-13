@@ -28,6 +28,13 @@ generated code and do not know templ's semantics, and templ's own LSP checks
 syntax only. templ-lint fills that gap. Findings point at the `.templ` source
 line, not at generated Go code.
 
+Beyond XSS, templ-lint also flags a few non-XSS issues that are visible in the
+template structure: reverse tabnabbing (`target="_blank"` without
+`rel="noopener"`) and missing Subresource Integrity on cross-origin scripts and
+stylesheets. Vulnerabilities that live in handler logic (SQL injection, auth,
+CSRF token validation) are out of scope — they are not visible in a `.templ`
+file.
+
 ## Install
 
 ```bash
@@ -68,6 +75,8 @@ Exit codes: `0` no findings / `1` findings (ERROR always; WARNING only with
 | `dyn-attr-name` | Dynamic attribute names (`{ name }={ value }`): an attacker-controlled name can become an event handler | ERROR |
 | `url-attr` | Dynamic request targets (`hx-get/post/put/patch/delete`) | WARNING |
 | `spread-attr` | Spread attributes (`{ attrs... }`): names and values are decided at runtime | WARNING |
+| `unsafe-target-blank` | `target="_blank"` without `rel="noopener"` — reverse tabnabbing (CWE-1022) | WARNING |
+| `missing-sri` | Cross-origin `<script>` / `<link rel=stylesheet>` without an `integrity` attribute — supply-chain risk (CWE-353) | WARNING |
 | `invalid-ignore` | `templ-lint:ignore` directive without a reason | WARNING |
 
 ### Examples

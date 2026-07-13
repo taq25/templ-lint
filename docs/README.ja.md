@@ -54,7 +54,13 @@ templ-lint -format json -strict ./views                # JSON 出力 / WARNING �
 | `dyn-attr-name` | 動的な属性名 (`{ name }={ value }`) | ERROR |
 | `url-attr` | 動的なリクエスト先 (`hx-get` 等) | WARNING |
 | `spread-attr` | スプレッド属性 (`{ attrs... }`) | WARNING |
+| `unsafe-target-blank` | `target="_blank"` に `rel="noopener"` がない — reverse tabnabbing (CWE-1022) | WARNING |
+| `missing-sri` | クロスオリジンの `<script>` / `<link rel=stylesheet>` に `integrity` がない — サプライチェーンリスク (CWE-353) | WARNING |
 | `invalid-ignore` | 理由のない `templ-lint:ignore` | WARNING |
+
+XSS 以外に、テンプレート構造から見える非 XSS の問題も検出する (reverse tabnabbing、
+外部リソースの SRI 欠如)。ハンドラ側ロジックに存在する脆弱性 (SQL インジェクション、
+認証、CSRF トークン検証) は `.templ` からは見えないため対象外。
 
 ### escape-bypass の例外
 

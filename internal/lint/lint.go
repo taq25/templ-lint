@@ -80,6 +80,18 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 		return prevHTMLComment(n)
 	}
 
+	// 要素レベルの規則: reverse tabnabbing, SRI 欠如
+	prevElement := v.Element
+	v.Element = func(n *parser.Element) error {
+		l.checkElement(path, n, &findings)
+		return prevElement(n)
+	}
+	prevScriptElement := v.ScriptElement
+	v.ScriptElement = func(n *parser.ScriptElement) error {
+		l.checkScript(path, n, &findings)
+		return prevScriptElement(n)
+	}
+
 	// 動的な属性値: <div x-init={ expr }> など
 	prevExprAttr := v.ExpressionAttribute
 	v.ExpressionAttribute = func(n *parser.ExpressionAttribute) error {

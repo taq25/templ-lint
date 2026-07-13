@@ -74,15 +74,42 @@ func TestLintFileSafeWithoutAllowlist(t *testing.T) {
 	}
 }
 
+func TestElementRules(t *testing.T) {
+	l := &Linter{}
+	findings, err := l.LintFile("../../testdata/elements.templ")
+	if err != nil {
+		t.Fatalf("LintFile failed: %v", err)
+	}
+	got := map[string]int{}
+	for _, f := range findings {
+		got[f.Rule]++
+	}
+	want := map[string]int{
+		RuleTabnabbing: 1, // rel なしの target=_blank
+		RuleMissingSRI: 2, // integrity なしの cross-origin script と link[stylesheet]
+	}
+	for rule, n := range want {
+		if got[rule] != n {
+			t.Errorf("rule %s: got %d findings, want %d", rule, got[rule], n)
+		}
+	}
+	if len(findings) != 3 {
+		t.Errorf("total findings: got %d, want 3", len(findings))
+		for _, f := range findings {
+			t.Logf("  %s:%d [%s] %s", f.File, f.Line, f.Rule, f.Message)
+		}
+	}
+}
+
 func TestLintPathsDirectory(t *testing.T) {
 	l := &Linter{AllowedSanitizers: []string{"sanitize.HTML"}}
 	findings, err := l.LintPaths([]string{"../../testdata"})
 	if err != nil {
 		t.Fatalf("LintPaths failed: %v", err)
 	}
-	// dangerous: 12, safe: 0, suppressed: 2
-	if len(findings) != 14 {
-		t.Errorf("total findings from directory walk: got %d, want 14", len(findings))
+	// dangerous: 12, safe: 0, suppressed: 2, elements: 3
+	if len(findings) != 17 {
+		t.Errorf("total findings from directory walk: got %d, want 17", len(findings))
 	}
 }
 
