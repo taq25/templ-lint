@@ -11,6 +11,7 @@ templ Dangerous(userInput string, userURL string, attrs templ.Attributes) {
 	<button hx-on:click={ userInput }>hx</button>
 	<div hx-get={ userURL }>load</div>
 	<div hx-vals={ userInput }>vals</div>
+	<img src="/x.png" onerror={ userInput }/>
 	<div { attrs... }>spread</div>
 	{{ raw := templ.Raw(userInput) }}
 	@raw

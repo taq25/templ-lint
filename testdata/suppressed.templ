@@ -1,0 +1,8 @@
+package testdata
+
+templ Suppressed(preset string, userInput string) {
+	// templ-lint:ignore js-eval-attr preset is chosen from a server-side enum, never user input
+	<div x-init={ preset }>ok</div>
+	<!-- templ-lint:ignore js-eval-attr -->
+	<div x-data={ userInput }>reason missing: not suppressed</div>
+}

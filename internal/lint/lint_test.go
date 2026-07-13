@@ -17,7 +17,7 @@ func TestLintFileDangerous(t *testing.T) {
 	}
 	want := map[string]int{
 		RuleEscapeBypass: 3, // @templ.Raw, templ.SafeURL, GoCode 内の templ.Raw
-		RuleJSEvalAttr:   6, // x-data, x-init, @click, x-on:click, hx-on:click, hx-vals
+		RuleJSEvalAttr:   7, // x-data, x-init, @click, x-on:click, hx-on:click, hx-vals, onerror
 		RuleURLAttr:      1, // hx-get
 		RuleSpreadAttr:   1, // { attrs... }
 	}
@@ -26,8 +26,8 @@ func TestLintFileDangerous(t *testing.T) {
 			t.Errorf("rule %s: got %d findings, want %d", rule, got[rule], n)
 		}
 	}
-	if len(findings) != 11 {
-		t.Errorf("total findings: got %d, want 11", len(findings))
+	if len(findings) != 12 {
+		t.Errorf("total findings: got %d, want 12", len(findings))
 		for _, f := range findings {
 			t.Logf("  %s:%d [%s] %s", f.File, f.Line, f.Rule, f.Message)
 		}
@@ -80,7 +80,39 @@ func TestLintPathsDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LintPaths failed: %v", err)
 	}
-	if len(findings) != 11 {
-		t.Errorf("total findings from directory walk: got %d, want 11", len(findings))
+	// dangerous: 12, safe: 0, suppressed: 2
+	if len(findings) != 14 {
+		t.Errorf("total findings from directory walk: got %d, want 14", len(findings))
+	}
+}
+
+func TestIgnoreDirective(t *testing.T) {
+	l := &Linter{}
+	findings, err := l.LintFile("../../testdata/suppressed.templ")
+	if err != nil {
+		t.Fatalf("LintFile failed: %v", err)
+	}
+
+	got := map[string]int{}
+	for _, f := range findings {
+		got[f.Rule]++
+	}
+	// 理由付きディレクティブ直後の x-init は抑制される。
+	// 理由なしディレクティブは invalid-ignore として報告され、
+	// 直後の x-data は抑制されない。
+	want := map[string]int{
+		RuleJSEvalAttr:    1,
+		RuleInvalidIgnore: 1,
+	}
+	if len(findings) != 2 {
+		t.Errorf("total findings: got %d, want 2", len(findings))
+		for _, f := range findings {
+			t.Logf("  %s:%d [%s] %s", f.File, f.Line, f.Rule, f.Message)
+		}
+	}
+	for rule, n := range want {
+		if got[rule] != n {
+			t.Errorf("rule %s: got %d findings, want %d", rule, got[rule], n)
+		}
 	}
 }

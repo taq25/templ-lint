@@ -12,6 +12,9 @@ import (
 	"github.com/taq25/templ-lint/internal/lint"
 )
 
+// version はリリース時に -ldflags "-X main.version=v0.2.0" で埋め込まれる。
+var version = "dev"
+
 type stringsFlag []string
 
 func (s *stringsFlag) String() string { return strings.Join(*s, ",") }
@@ -27,15 +30,22 @@ func main() {
 
 func run() int {
 	var (
-		format     string
-		strict     bool
-		sanitizers stringsFlag
+		format      string
+		strict      bool
+		showVersion bool
+		sanitizers  stringsFlag
 	)
 	flag.StringVar(&format, "format", "text", "output format: text | json")
 	flag.BoolVar(&strict, "strict", false, "treat WARNING findings as failures too")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Var(&sanitizers, "allow-sanitizer",
 		"sanitizer allowed as templ.Raw argument in pkg.Func form (e.g. sanitize.HTML); repeatable")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Fprintf(os.Stdout, "templ-lint %s\n", version)
+		return 0
+	}
 
 	paths := flag.Args()
 	if len(paths) == 0 {

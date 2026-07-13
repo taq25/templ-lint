@@ -63,8 +63,22 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 		return nil, goerr.Wrap(err, "failed to parse templ file", goerr.V("path", path))
 	}
 	var findings []Finding
+	var ignores []ignoreDirective
 
 	v := visitor.New()
+
+	// 抑制ディレクティブ: // templ-lint:ignore <rule> <理由> または <!-- 同 -->
+	// コメントと同じ行、およびその直後の行の該当ルールを抑制する。
+	prevGoComment := v.GoComment
+	v.GoComment = func(n *parser.GoComment) error {
+		collectIgnore(path, n.Contents, n.Range, &ignores, &findings)
+		return prevGoComment(n)
+	}
+	prevHTMLComment := v.HTMLComment
+	v.HTMLComment = func(n *parser.HTMLComment) error {
+		collectIgnore(path, n.Contents, n.Range, &ignores, &findings)
+		return prevHTMLComment(n)
+	}
 
 	// 動的な属性値: <div x-init={ expr }> など
 	prevExprAttr := v.ExpressionAttribute
@@ -122,7 +136,63 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 	if err := tf.Visit(v); err != nil {
 		return nil, goerr.Wrap(err, "failed to visit templ AST", goerr.V("path", path))
 	}
-	return findings, nil
+	return applyIgnores(findings, ignores), nil
+}
+
+// ignoreDirective は理由付き抑制コメント 1 件。
+// fromLine〜toLine (コメント自身) と toLine+1 (直後の行) の検出を抑制する。
+type ignoreDirective struct {
+	fromLine uint32 // 1 始まり
+	toLine   uint32
+	rules    map[string]bool
+}
+
+func collectIgnore(path, contents string, r parser.Range, ignores *[]ignoreDirective, findings *[]Finding) {
+	m := ignoreDirectivePattern.FindStringSubmatch(contents)
+	if m == nil {
+		return
+	}
+	reason := strings.TrimSpace(m[2])
+	if reason == "" {
+		// 理由のない抑制は無効化し、それ自体を報告する
+		*findings = append(*findings, Finding{
+			File: path, Line: r.From.Line + 1, Col: r.From.Col + 1,
+			Rule: RuleInvalidIgnore, Severity: SeverityWarning,
+			Message: "templ-lint:ignore requires a reason (templ-lint:ignore <rule> <why it is safe>); directive is ineffective without one",
+		})
+		return
+	}
+	rules := map[string]bool{}
+	for _, id := range strings.Split(m[1], ",") {
+		rules[strings.TrimSpace(id)] = true
+	}
+	*ignores = append(*ignores, ignoreDirective{
+		fromLine: r.From.Line + 1,
+		toLine:   r.To.Line + 1,
+		rules:    rules,
+	})
+}
+
+func applyIgnores(findings []Finding, ignores []ignoreDirective) []Finding {
+	if len(ignores) == 0 {
+		return findings
+	}
+	kept := findings[:0]
+	for _, f := range findings {
+		if !suppressed(f, ignores) {
+			kept = append(kept, f)
+		}
+	}
+	return kept
+}
+
+func suppressed(f Finding, ignores []ignoreDirective) bool {
+	for _, d := range ignores {
+		if d.rules[f.Rule] && f.Line >= d.fromLine && f.Line <= d.toLine+1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *Linter) checkAttribute(path string, n *parser.ExpressionAttribute, findings *[]Finding) {

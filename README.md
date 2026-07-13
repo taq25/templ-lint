@@ -1,43 +1,103 @@
 # templ-lint
 
-[a-h/templ](https://github.com/a-h/templ) の `.templ` ファイルを `parser/v2` で直接解析し、
-htmx / Alpine.js 利用時に XSS へつながる危険な記述を検出するリンタ。
+[![CI](https://github.com/taq25/templ-lint/actions/workflows/ci.yaml/badge.svg)](https://github.com/taq25/templ-lint/actions/workflows/ci.yaml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## 背景
+A security linter for [a-h/templ](https://github.com/a-h/templ) templates.
+It parses `.templ` files directly with templ's official `parser/v2` and detects
+patterns that lead to XSS when templ is combined with **htmx** and **Alpine.js**.
 
-templ はテキスト補間・属性値を HTML エスケープするが、**Alpine.js
-(`x-data`, `x-init`, `@click`, `x-on:*` 等) と htmx (`hx-on:*`, `hx-vals`,
-`hx-headers`) は属性値の文字列をそのまま JavaScript として評価する**。
-そのため次のコードはエスケープされていても XSS になる:
+日本語ドキュメントは [docs/README.ja.md](docs/README.ja.md) を参照してください。
+
+## Why
+
+templ HTML-escapes all interpolated text and attribute values. That is not
+enough when the frontend reads behavior from attributes:
 
 ```
-<div x-init={ userInput }>   // userInput がそのまま eval される
+<div x-init={ userInput }>
 ```
 
-この領域は既存の静的解析ツール (golangci-lint / gosec / templ 本体の LSP) では
-カバーされていない。本ツールは `.templ` を templ 公式のパーサで直接解析するため、
-生成コード (`*_templ.go`) の形式に依存せず、指摘位置も `.templ` の行・列を直接指す。
+Alpine.js **evaluates the attribute value as JavaScript**. The value is
+HTML-escaped by templ, but escaping does not matter — Alpine reads the string
+back from the DOM and executes it. The same applies to `hx-on:*`, `hx-vals`
+(`js:` prefix), and plain HTML `on*` handlers.
 
-## ルール
+This class of bug is invisible to existing tools: golangci-lint and gosec skip
+generated code and do not know templ's semantics, and templ's own LSP checks
+syntax only. templ-lint fills that gap. Findings point at the `.templ` source
+line, not at generated Go code.
 
-| ルール ID | 内容 | 重大度 |
-|---|---|---|
-| `js-eval-attr` | JS として評価される属性 (`x-data`, `x-init`, `x-html`, `x-text`, `x-show`, `x-if`, `x-for`, `x-effect`, `x-on:*`, `@*`, `:*`, `x-model*`, `hx-on:*`, `hx-vals`, `hx-headers`) への動的値 | ERROR |
-| `escape-bypass` | `templ.Raw` / `templ.SafeURL` / `templ.JSExpression` / `templ.JSUnsafeFuncCall` への非リテラル引数。`{{ ... }}` の Go コード片内も検査する | ERROR |
-| `dyn-attr-name` | 動的な属性名 (`{ name }={ value }`)。名前ごと攻撃者が選べるとイベントハンドラを注入できる | ERROR |
-| `url-attr` | リクエスト先になる属性 (`hx-get/post/put/patch/delete`) への動的値。サーバ側の許可リスト検証を促す | WARNING |
-| `spread-attr` | スプレッド属性 (`{ attrs... }`)。属性名も値も動的になる | WARNING |
+## Install
 
-### escape-bypass の例外 (許可される形)
+```bash
+go install github.com/taq25/templ-lint@latest
+```
 
-| 書き方 | 判定 |
+Or download a binary from [Releases](https://github.com/taq25/templ-lint/releases).
+
+## Usage
+
+```bash
+# Lint all *.templ files under ./views (recursive)
+templ-lint ./views
+
+# Allow your project's sanitizer wrapper as a templ.Raw argument
+templ-lint -allow-sanitizer sanitize.HTML ./views
+
+# JSON output; treat warnings as failures
+templ-lint -format json -strict ./views
+```
+
+| Flag | Description |
 |---|---|
-| `templ.Raw("<hr/>")` | 許可 (静的リテラル) |
-| `templ.Raw(bluemonday.UGCPolicy().Sanitize(x))` | 許可 (bluemonday チェーンは常に許可) |
-| `templ.Raw(sanitize.HTML(x))` | `-allow-sanitizer sanitize.HTML` 指定時のみ許可 |
-| `templ.Raw(p.Sanitize(x))` (変数のポリシー) | 不許可 (AST では由来を検証できないため。チェーンかラッパーに寄せる) |
+| `-allow-sanitizer pkg.Func` | Allow `templ.Raw(pkg.Func(x))` etc. Repeatable. |
+| `-format text\|json` | Output format (default `text`). |
+| `-strict` | Exit non-zero on WARNING findings too. |
+| `-version` | Print version and exit. |
 
-サニタイズラッパーの推奨実装 (ポリシー構築は 1 回、レビュー対象を 1 ファイルに集約):
+Exit codes: `0` no findings / `1` findings (ERROR always; WARNING only with
+`-strict`) / `2` execution error.
+
+## Rules
+
+| Rule | What it catches | Severity |
+|---|---|---|
+| `js-eval-attr` | Dynamic values in attributes that are evaluated as JavaScript: HTML `on*`; Alpine `x-data`, `x-init`, `x-html`, `x-text`, `x-show`, `x-if`, `x-for`, `x-effect`, `x-on:*`, `@*`, `:*`, `x-model*`; htmx `hx-on:*`, `hx-vals`, `hx-headers` | ERROR |
+| `escape-bypass` | Non-literal arguments to `templ.Raw`, `templ.SafeURL`, `templ.JSExpression`, `templ.JSUnsafeFuncCall` — including inside `{{ ... }}` Go code blocks | ERROR |
+| `dyn-attr-name` | Dynamic attribute names (`{ name }={ value }`): an attacker-controlled name can become an event handler | ERROR |
+| `url-attr` | Dynamic request targets (`hx-get/post/put/patch/delete`) | WARNING |
+| `spread-attr` | Spread attributes (`{ attrs... }`): names and values are decided at runtime | WARNING |
+| `invalid-ignore` | `templ-lint:ignore` directive without a reason | WARNING |
+
+### Examples
+
+```
+// NG: evaluated as JavaScript by Alpine even though templ escapes it
+<div x-init={ userInput }>
+
+// OK: static expression
+<div x-data="{ open: false }">
+
+// OK: pass data as JSON via a data-* attribute, read it from Alpine
+<div data-cfg={ templ.JSONString(cfg) } x-data="{ cfg: JSON.parse($el.dataset.cfg) }">
+```
+
+```
+// NG: bypasses escaping with a non-literal value
+@templ.Raw(userHTML)
+
+// OK: static literal
+@templ.Raw("<hr/>")
+
+// OK: sanitized via a bluemonday policy chain (always allowed)
+@templ.Raw(bluemonday.UGCPolicy().Sanitize(userHTML))
+
+// OK with -allow-sanitizer sanitize.HTML: your audited wrapper
+@templ.Raw(sanitize.HTML(userHTML))
+```
+
+The recommended wrapper keeps the bluemonday policy in one reviewable place:
 
 ```go
 // internal/sanitize/sanitize.go
@@ -50,43 +110,70 @@ var ugc = bluemonday.UGCPolicy()
 func HTML(s string) string { return ugc.Sanitize(s) }
 ```
 
-## 使い方
+Note: `p.Sanitize(x)` on a stored policy variable is **not** allowed — the AST
+cannot verify that `p` is a bluemonday policy, and allowing any method named
+`Sanitize` would be a loophole. Use the chain form or a wrapper.
 
-```bash
-go install github.com/taq25/templ-lint@latest
+## Suppressing a finding
 
-# ディレクトリを再帰的に検査 (*.templ を収集)
-templ-lint ./views
+When a finding is a false positive, suppress it with a comment on the same or
+previous line. **A reason is required**; a directive without one is reported
+as `invalid-ignore` and has no effect.
 
-# サニタイズラッパーを許可して検査
-templ-lint -allow-sanitizer sanitize.HTML ./views
-
-# JSON 出力 / WARNING も失敗扱い
-templ-lint -format json -strict ./views
+```
+// templ-lint:ignore js-eval-attr preset is chosen from a server-side enum, never user input
+<div x-init={ preset }>
 ```
 
-終了コード: `0` = 問題なし / `1` = 検出あり (WARNING のみの場合は `-strict` 時のみ) / `2` = 実行エラー
+HTML comments work too: `<!-- templ-lint:ignore js-eval-attr <reason> -->`.
+Multiple rules can be listed separated by commas.
 
-### CI (GitHub Actions)
+## CI
 
 ```yaml
+- uses: actions/setup-go@v5
+  with:
+    go-version-file: go.mod
 - run: go run github.com/taq25/templ-lint@latest -allow-sanitizer sanitize.HTML ./views
 ```
 
-## 静的検知と併用すべきランタイム対策
+Pin a version tag instead of `@latest` in CI: new lint rules are effectively
+breaking changes for your pipeline.
 
-すり抜けに備え、攻撃クラス自体を潰す設定を併用すること:
+## How it works
 
-- **Alpine.js CSP ビルド** (`@alpinejs/csp`): 属性値の文字列 eval を廃止したビルド
-- **CSP ヘッダ**: `script-src` から `unsafe-eval` を除外
-- `htmx.config.allowEval = false`, `htmx.config.selfRequestsOnly = true` (htmx 2 でデフォルト)
+templ-lint combines two official parsers instead of implementing its own:
 
-## 開発
+1. templ's `parser/v2` parses the `.templ` file. Its AST distinguishes static
+   (`ConstantAttribute`) from dynamic (`ExpressionAttribute`) values by type,
+   and keeps Go expressions as positioned strings.
+2. Each embedded Go expression is parsed with the standard `go/parser`, so
+   `templ.Raw(...)` arguments are analyzed on a real Go AST (literal detection,
+   sanitizer allowlist).
+
+Because it links against the same parser the templ compiler uses, a templ
+upgrade that changes the AST fails loudly at compile time — there is no silent
+false-negative mode. Keep the `templ` version in this module's `go.mod` aligned
+with your application's.
+
+## Limitations
+
+- Only `.templ` files are scanned. `templ.Raw` calls in handwritten `.go`
+  files are out of scope (pair with a Go-side linter if you need that).
+- No taint tracking: any non-literal argument to `templ.Raw` is flagged unless
+  it matches the sanitizer allowlist, even if it was sanitized elsewhere.
+- Static analysis cannot see runtime values; combine with runtime hardening:
+  the [Alpine.js CSP build](https://alpinejs.dev/advanced/csp), a CSP header
+  without `unsafe-eval`, and `htmx.config.allowEval = false` /
+  `htmx.config.selfRequestsOnly = true`.
+
+## Development
 
 ```bash
-go test ./...   # testdata/dangerous.templ (11 件検出) / safe.templ (0 件) で検証
+go test ./...    # includes golden tests against testdata/*.templ
 go build .
 ```
 
-templ のバージョンは go.mod でアプリ本体と揃えること。parser/v2 の API が
-変わった場合はコンパイルエラーとして顕在化する (静かな偽陰性は起きない)。
+## License
+
+[MIT](LICENSE)
