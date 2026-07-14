@@ -73,7 +73,7 @@ Exit codes: `0` no findings / `1` findings (ERROR always; WARNING only with
 | `js-eval-attr` | Dynamic values in attributes that are evaluated as JavaScript: HTML `on*`; Alpine `x-data`, `x-init`, `x-html`, `x-text`, `x-show`, `x-if`, `x-for`, `x-effect`, `x-on:*`, `@*`, `:*`, `x-model*`; htmx `hx-on:*`, `hx-vals`, `hx-headers` | ERROR |
 | `escape-bypass` | Non-literal arguments to `templ.Raw`, `templ.SafeURL`, `templ.JSExpression`, `templ.JSUnsafeFuncCall` — including inside `{{ ... }}` Go code blocks | ERROR |
 | `dyn-attr-name` | Dynamic attribute names (`{ name }={ value }`): an attacker-controlled name can become an event handler | ERROR |
-| `url-attr` | Dynamic request targets (`hx-get/post/put/patch/delete`) | WARNING |
+| `url-attr` | Dynamic request targets (`hx-get/post/put/patch/delete`). Relative paths that are statically same-origin (a leading `"/x…"` string literal, e.g. `"/posts/" + id`) are excluded; protocol-relative `//host` and variable-built URLs are still flagged | WARNING |
 | `spread-attr` | Spread attributes (`{ attrs... }`): names and values are decided at runtime | WARNING |
 | `unsafe-target-blank` | `target="_blank"` without `rel="noopener"` — reverse tabnabbing (CWE-1022) | WARNING |
 | `missing-sri` | Cross-origin `<script>` / `<link rel=stylesheet>` without an `integrity` attribute — supply-chain risk (CWE-353) | WARNING |

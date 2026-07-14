@@ -228,13 +228,16 @@ func (l *Linter) checkAttribute(path string, n *parser.ExpressionAttribute, find
 				name),
 		})
 	case urlAttrPattern.MatchString(name):
-		*findings = append(*findings, Finding{
-			File: path, Line: n.Range.From.Line + 1, Col: n.Range.From.Col + 1,
-			Rule: RuleURLAttr, Severity: SeverityWarning,
-			Message: fmt.Sprintf(
-				"dynamic URL in %q: htmx will send a request to this URL; validate it against an allowlist server-side",
-				name),
-		})
+		// 相対パス (自オリジン確定) は外部送信の心配がないので除外する。
+		if !isSameOriginRelativeURL(n.Expression) {
+			*findings = append(*findings, Finding{
+				File: path, Line: n.Range.From.Line + 1, Col: n.Range.From.Col + 1,
+				Rule: RuleURLAttr, Severity: SeverityWarning,
+				Message: fmt.Sprintf(
+					"dynamic URL in %q: htmx will send a request to this URL; validate it against an allowlist server-side",
+					name),
+			})
+		}
 	}
 	// 属性値の Go 式内の templ.SafeURL(x) 等も検査する
 	l.checkGoSnippet(path, n.Expression, findings)

@@ -52,7 +52,7 @@ templ-lint -format json -strict ./views                # JSON 出力 / WARNING �
 | `js-eval-attr` | JS として評価される属性への動的値 (HTML `on*` / Alpine `x-*`, `@*`, `:*` / htmx `hx-on:*`, `hx-vals`, `hx-headers`) | ERROR |
 | `escape-bypass` | `templ.Raw` / `templ.SafeURL` / `templ.JSExpression` への非リテラル引数 (`{{ ... }}` の Go コード片内も検査) | ERROR |
 | `dyn-attr-name` | 動的な属性名 (`{ name }={ value }`) | ERROR |
-| `url-attr` | 動的なリクエスト先 (`hx-get` 等) | WARNING |
+| `url-attr` | 動的なリクエスト先 (`hx-get` 等)。自オリジン確定の相対パス (先頭が `"/x…"` の文字列リテラル、例 `"/posts/" + id`) は除外。`//host` のプロトコル相対や変数由来の URL は検知 | WARNING |
 | `spread-attr` | スプレッド属性 (`{ attrs... }`) | WARNING |
 | `unsafe-target-blank` | `target="_blank"` に `rel="noopener"` がない — reverse tabnabbing (CWE-1022) | WARNING |
 | `missing-sri` | クロスオリジンの `<script>` / `<link rel=stylesheet>` に `integrity` がない — サプライチェーンリスク (CWE-353) | WARNING |

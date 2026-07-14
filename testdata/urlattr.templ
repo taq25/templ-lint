@@ -1,0 +1,15 @@
+package testdata
+
+// url-attr の相対パス除外 (テスト用)
+templ URLAttr(n int, base string, userURL string) {
+	// 相対パス + 動的部分 → 自オリジン確定 → 除外
+	<div hx-get={ "/?page=" + strconv.Itoa(n) }>relative concat</div>
+	// 相対パスのリテラル → 除外
+	<div hx-post={ "/items" }>relative literal</div>
+	// 変数から組み立て → 中身不明 → 検知
+	<div hx-get={ base + "/x" }>dynamic base</div>
+	// プロトコル相対 (別オリジンに飛ぶ) → 検知
+	<div hx-get={ "//evil.example/" + userURL }>protocol-relative</div>
+	// 素の変数 → 検知
+	<div hx-get={ userURL }>bare variable</div>
+}

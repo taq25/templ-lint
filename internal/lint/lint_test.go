@@ -74,6 +74,28 @@ func TestLintFileSafeWithoutAllowlist(t *testing.T) {
 	}
 }
 
+func TestURLAttrRelativeExclusion(t *testing.T) {
+	l := &Linter{}
+	findings, err := l.LintFile("../../testdata/urlattr.templ")
+	if err != nil {
+		t.Fatalf("LintFile failed: %v", err)
+	}
+	got := 0
+	for _, f := range findings {
+		if f.Rule == RuleURLAttr {
+			got++
+		}
+	}
+	// 検知されるのは: base+"/x", "//evil"+userURL, userURL の 3 件。
+	// 除外されるのは: "/?page="+strconv, "/items" の 2 件。
+	if got != 3 {
+		t.Errorf("url-attr findings: got %d, want 3", got)
+		for _, f := range findings {
+			t.Logf("  %s:%d [%s] %s", f.File, f.Line, f.Rule, f.Message)
+		}
+	}
+}
+
 func TestElementRules(t *testing.T) {
 	l := &Linter{}
 	findings, err := l.LintFile("../../testdata/elements.templ")
@@ -107,9 +129,9 @@ func TestLintPathsDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LintPaths failed: %v", err)
 	}
-	// dangerous: 12, safe: 0, suppressed: 2, elements: 3
-	if len(findings) != 17 {
-		t.Errorf("total findings from directory walk: got %d, want 17", len(findings))
+	// dangerous: 12, safe: 0, suppressed: 2, elements: 3, urlattr: 3
+	if len(findings) != 20 {
+		t.Errorf("total findings from directory walk: got %d, want 20", len(findings))
 	}
 }
 

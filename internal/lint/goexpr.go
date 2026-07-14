@@ -5,10 +5,51 @@ import (
 	goast "go/ast"
 	goparser "go/parser"
 	"go/token"
+	"strconv"
 	"strings"
 
 	parser "github.com/a-h/templ/parser/v2"
 )
+
+// isSameOriginRelativeURL は、属性値の Go 式が「自オリジンの相対 URL」だと
+// 静的に確定できるかを判定する。確定できる場合だけ true。
+//
+// 相対パス (先頭が "/") は必ず同一オリジンを指すので、動的に組み立てていても
+// htmx が外部へリクエストを送る心配はない。ただし "//host" や "/\host" は
+// プロトコル相対 URL として別オリジンへ飛ぶため、先頭 "/" の次の文字が
+// "/" でも "\" でもないことまで確認する。
+//
+// 判定できるのは、式が文字列リテラル、または + 連結の最左要素が
+// そのような文字列リテラルである場合に限る (例: "/posts/" + strconv.Itoa(id))。
+// 変数由来 (baseURL + path など) は中身が見えないので false = 検知を維持する。
+func isSameOriginRelativeURL(expr parser.Expression) bool {
+	e, err := goparser.ParseExpr(expr.Value)
+	if err != nil {
+		return false
+	}
+	// + 連結の最左要素まで降りる ("a" + b + c は ((a+b)+c) と左結合)
+	for {
+		bin, ok := e.(*goast.BinaryExpr)
+		if !ok || bin.Op != token.ADD {
+			break
+		}
+		e = bin.X
+	}
+	lit, ok := e.(*goast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return false
+	}
+	// "/x..." の形 (先頭 "/" かつ次が "/"・"\" 以外) だけを同一オリジンと見なす。
+	// "/" 単独や "//"・"/\" はプロトコル相対で別オリジンになり得るため除外しない。
+	if len(s) < 2 || s[0] != '/' {
+		return false
+	}
+	return s[1] != '/' && s[1] != '\\'
+}
 
 // checkGoSnippet は .templ 内の Go 式/コード片を go/parser で解析し、
 // templ.Raw / templ.SafeURL 等への非リテラル引数を検出する。
