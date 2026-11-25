@@ -135,9 +135,10 @@ func TestLintPathsDirectory(t *testing.T) {
 		t.Fatalf("LintPaths failed: %v", err)
 	}
 	// dangerous: 12, safe: 0, suppressed: 2, elements: 3, urlattr: 3,
-	// evasion: 32 (data-x-init は -alpine-prefix なしでは対象外)
-	if len(findings) != 52 {
-		t.Errorf("total findings from directory walk: got %d, want 52", len(findings))
+	// evasion: 36 (data-x-init は -alpine-prefix なしでは対象外),
+	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない)
+	if len(findings) != 59 {
+		t.Errorf("total findings from directory walk: got %d, want 59", len(findings))
 	}
 }
 
@@ -172,28 +173,69 @@ func TestIgnoreDirective(t *testing.T) {
 	}
 }
 
-// evasion.templ は過去に見逃していた書き方の回帰テスト。
-// 各行末のコメントに期待するルールを書き、その行で 1 件だけ検出されることを確かめる。
-func TestEvasionRegression(t *testing.T) {
-	const path = "../../testdata/evasion.templ"
-	l := &Linter{AlpinePrefixes: []string{"data-x-"}}
-	findings, err := l.LintFile(path)
-	if err != nil {
-		t.Fatalf("LintFile failed: %v", err)
+// 行末のコメントに期待するルールを書いた testdata を、設定ごとに検査する。
+// 各行で期待どおりのルールが 1 件だけ検出され、それ以外の行では何も検出されないこと。
+//
+//	evasion.templ: 過去に見逃していた書き方の回帰テスト
+//	htmx4.templ / htmx2.templ: バージョンによって意味が変わる属性
+func TestAnnotatedTestdata(t *testing.T) {
+	cases := []struct {
+		file   string
+		linter *Linter
+	}{
+		{"evasion.templ", &Linter{AlpinePrefixes: []string{"data-x-"}}},
+		{"htmx4.templ", &Linter{HTMXVersion: htmxVersion4, AllowedSanitizers: []string{"sanitize.HTML"}}},
+		{"htmx2.templ", &Linter{HTMXVersion: htmxVersion2, AllowedSanitizers: []string{"sanitize.HTML"}}},
 	}
-	want := expectedRulesByLine(t, path)
-	got := map[uint32][]string{}
-	for _, f := range findings {
-		got[f.Line] = append(got[f.Line], f.Rule)
+	for _, c := range cases {
+		t.Run(c.file, func(t *testing.T) {
+			path := "../../testdata/" + c.file
+			findings, err := c.linter.LintFile(path)
+			if err != nil {
+				t.Fatalf("LintFile failed: %v", err)
+			}
+			want := expectedRulesByLine(t, path)
+			got := map[uint32][]string{}
+			for _, f := range findings {
+				got[f.Line] = append(got[f.Line], f.Rule)
+			}
+			for line, rule := range want {
+				if len(got[line]) != 1 || got[line][0] != rule {
+					t.Errorf("line %d: got %v, want [%s]", line, got[line], rule)
+				}
+			}
+			for line, rules := range got {
+				if _, ok := want[line]; !ok {
+					t.Errorf("line %d: unexpected findings %v", line, rules)
+				}
+			}
+		})
 	}
-	for line, rule := range want {
-		if len(got[line]) != 1 || got[line][0] != rule {
-			t.Errorf("line %d: got %v, want [%s]", line, got[line], rule)
+}
+
+// バージョン未指定では、バージョンによって意味が変わる検査は行わない
+// (hx-disable / hx-ignore は報告しない、hx-confirm は htmx 4 の js: を想定して安全側)。
+func TestHTMXVersionUnspecified(t *testing.T) {
+	l := &Linter{AllowedSanitizers: []string{"sanitize.HTML"}}
+	for file, want := range map[string]map[string]int{
+		"htmx4.templ": {RuleHTMXConfigMeta: 1, RuleJSEvalAttr: 1},
+		"htmx2.templ": {RuleJSEvalAttr: 1},
+	} {
+		findings, err := l.LintFile("../../testdata/" + file)
+		if err != nil {
+			t.Fatalf("LintFile failed: %v", err)
 		}
-	}
-	for line, rules := range got {
-		if _, ok := want[line]; !ok {
-			t.Errorf("line %d: unexpected findings %v", line, rules)
+		got := map[string]int{}
+		for _, f := range findings {
+			got[f.Rule]++
+		}
+		if len(got) != len(want) {
+			t.Errorf("%s: got %v, want %v", file, got, want)
+		}
+		for rule, n := range want {
+			if got[rule] != n {
+				t.Errorf("%s: rule %s: got %d, want %d", file, rule, got[rule], n)
+			}
 		}
 	}
 }
@@ -232,6 +274,7 @@ var knownRules = map[string]bool{
 	RuleJSEvalAttr: true, RuleURLAttr: true, RuleSpreadAttr: true, RuleEscapeBypass: true,
 	RuleDynAttrName: true, RuleTabnabbing: true, RuleMissingSRI: true, RuleInvalidIgnore: true,
 	RuleUnvettedAttr: true, RuleUnsafeURLAttr: true, RuleSrcdocAttr: true,
+	RuleHTMXConfigMeta: true, RuleHTMXDisableSemantics: true,
 }
 
 func TestNormalize(t *testing.T) {

@@ -128,3 +128,15 @@ func TestHTMXPrefixFlag(t *testing.T) {
 		t.Errorf("with -htmx-prefix: exit = %d, want 1\n%s", code, stdout.String())
 	}
 }
+
+// -htmx は 2 か 4 だけを受け付ける。
+func TestHTMXVersionFlagValidation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-htmx", "3", "testdata/safe.templ"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	stderr.Reset()
+	if code := run([]string{"-htmx", "4", "-allow-sanitizer", "sanitize.HTML", "testdata/safe.templ"}, &stdout, &stderr); code != 0 {
+		t.Errorf("exit = %d, want 0 (stderr: %s)", code, stderr.String())
+	}
+}

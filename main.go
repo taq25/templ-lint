@@ -39,6 +39,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		sanitizers  stringsFlag
 		htmxPrefix  stringsFlag
 		alpinePref  stringsFlag
+		htmxVersion int
 	)
 	fs := flag.NewFlagSet("templ-lint", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -51,7 +52,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"extra attribute prefix that htmx treats as hx- (htmx.config.prefix, e.g. data-boost-); data-hx- is always recognized; repeatable")
 	fs.Var(&alpinePref, "alpine-prefix",
 		"extra attribute prefix that Alpine treats as x- (Alpine.prefix, e.g. data-x-); repeatable")
+	fs.IntVar(&htmxVersion, "htmx", 0,
+		"htmx major version (2 or 4); enables checks whose meaning differs between versions (hx-disable / hx-ignore, hx-confirm)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if htmxVersion != 0 && htmxVersion != 2 && htmxVersion != 4 {
+		fmt.Fprintf(stderr, "templ-lint: -htmx must be 2 or 4, got %d\n", htmxVersion)
 		return 2
 	}
 
@@ -69,6 +76,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		AllowedSanitizers: sanitizers,
 		HTMXPrefixes:      htmxPrefix,
 		AlpinePrefixes:    alpinePref,
+		HTMXVersion:       htmxVersion,
 	}
 	findings, err := l.LintPaths(paths)
 	if err != nil {

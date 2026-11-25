@@ -48,6 +48,11 @@ templ Evasion(u string, ok bool) {
 	{{ f := templ.Raw }}                                       // escape-bypass
 	@f(u)
 	<div style={ templ.SafeCSS(u) }>css</div>                  // escape-bypass
+	// 安全な書き方の抜け道
+	<button onclick={ templ.JSFuncCall(u, "x") }>name</button>  // js-eval-attr
+	<button @click={ templ.JSFuncCall("f", u) }>alpine</button> // js-eval-attr
+	<div hx-trigger={ templ.JSONString(u) }>trigger</div>      // js-eval-attr
+	<button onclick={ templ.ComponentScript{Call: u} }>lit</button> // escape-bypass
 }
 
 // テンプレート外のヘルパー関数

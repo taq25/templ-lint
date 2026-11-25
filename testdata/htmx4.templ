@@ -1,0 +1,22 @@
+package testdata
+
+// -htmx 4 で検査する。行末コメントは期待するルール。
+templ HTMX4(u string, userHTML string, cfg string) {
+	<meta name="htmx-config" content={ cfg }/>                 // htmx-config-meta
+	<meta name="htmx-config" content={ templ.JSONString(cfg) }/>
+	<meta name="htmx-config" content='{"mode":"same-origin"}'/>
+	// htmx 2 の書き方: 値なしの hx-disable はもう子孫を守らない
+	<div hx-disable>                                          // htmx-disable-semantics
+		@templ.Raw(sanitize.HTML(userHTML))
+	</div>
+	// セレクタ付きでも、中にテンプレートから見えない HTML があれば指摘する
+	<div hx-disable="this">                                   // htmx-disable-semantics
+		{ children... }
+	</div>
+	// htmx 4 の正しい使い方
+	<button hx-post="/save" hx-disable="this">save</button>
+	<div hx-ignore>
+		@templ.Raw(sanitize.HTML(userHTML))
+	</div>
+	<div hx-confirm={ u }>confirm js:</div>                   // js-eval-attr
+}

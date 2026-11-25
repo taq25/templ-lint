@@ -31,4 +31,7 @@ const (
 	RuleUnvettedAttr  = "unvetted-attr"       // 安全性を確認していない htmx 属性への動的値
 	RuleUnsafeURLAttr = "unsafe-url-attr"     // templ が URL サニタイズしない属性への動的 URL
 	RuleSrcdocAttr    = "srcdoc-attr"         // iframe srcdoc (HTML として解釈される) への動的値
+
+	RuleHTMXConfigMeta       = "htmx-config-meta"       // <meta name="htmx-config"> への動的値
+	RuleHTMXDisableSemantics = "htmx-disable-semantics" // htmx 2/4 で意味が入れ替わった hx-disable / hx-ignore
 )

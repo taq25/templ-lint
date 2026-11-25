@@ -30,6 +30,10 @@ type Linter struct {
 	HTMXPrefixes []string
 	// AlpinePrefixes は x- と同じ意味を持つ追加の属性接頭辞 (Alpine.prefix)。
 	AlpinePrefixes []string
+	// HTMXVersion は対象の htmx のメジャーバージョン (2 または 4)。0 なら未指定で、
+	// バージョンによって意味が変わる検査 (hx-disable / hx-ignore, hx-confirm) は
+	// 安全側に倒すか行わない。
+	HTMXVersion int
 }
 
 func (l *Linter) normalizer() AttrNormalizer {
@@ -100,6 +104,7 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 	v.Element = func(n *parser.Element) error {
 		element = strings.ToLower(n.Name)
 		l.checkElement(path, n, &findings)
+		l.checkHTMXElement(path, tn, n, &findings)
 		return prevElement(n)
 	}
 	prevScriptElement := v.ScriptElement
@@ -258,7 +263,16 @@ func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.E
 	// 静的な値なので属性値の規則の対象外 (属性値の Go 式内の templ.Raw 等は下で検査する)。
 	if !isConstantStringSrc(n.Expression.Value) {
 		value := n.Expression
-		switch classifyAttr(l.normalizer().Normalize(raw)) {
+		normalized := l.normalizer().Normalize(raw)
+		class := classifyAttr(normalized)
+		if (class == attrJSEval || class == attrJSEvalPrefixed) && isSafeScriptValue(tn, raw, normalized, value.Value) {
+			class = attrSafe
+		}
+		// htmx 2 の hx-confirm は確認ダイアログの文言で、js: を評価するのは htmx 4 から
+		if normalized == "hx-confirm" && l.HTMXVersion == htmxVersion2 {
+			class = attrSafe
+		}
+		switch class {
 		case attrJSEval:
 			add(RuleJSEvalAttr, SeverityError, fmt.Sprintf(
 				"dynamic value in %q: Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute",

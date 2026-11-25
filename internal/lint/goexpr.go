@@ -248,6 +248,14 @@ func (l *Linter) checkGoSnippet(path string, tn templNames, expr parser.Expressi
 			report(n.Pos(), fmt.Sprintf(
 				"templ.%s bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal",
 				name))
+		case *goast.CompositeLit:
+			// templ.ComponentScript{Call: x} は templ.JSUnsafeFuncCall(x) と同じく
+			// on* / hx-on:* に任意の JS を出力する
+			name, ok := tn.templFunc(n.Type)
+			if !ok || name != "ComponentScript" || componentScriptIsConstant(n) {
+				return true
+			}
+			report(n.Pos(), "templ.ComponentScript literal with a non-literal Call: the value is output as JavaScript as-is; use templ.JSFuncCall with a static function name")
 		case *goast.SelectorExpr:
 			// dot import 時の素の識別子 (f := Raw) は、宣言や別パッケージのセレクタの一部
 			// としても現れて区別できないため、値としての使用は templ.X / 別名.X の形だけを見る。
@@ -302,6 +310,79 @@ func (l *Linter) isAllowedArg(arg goast.Expr) bool {
 		}
 	}
 	return false
+}
+
+// componentScriptIsConstant は ComponentScript リテラルの JS を出力するフィールドが
+// すべて文字列リテラルかを判定する。
+func componentScriptIsConstant(lit *goast.CompositeLit) bool {
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*goast.KeyValueExpr)
+		if !ok {
+			// フィールド名なしの初期化は Call / CallInline の位置を特定しない
+			if !isConstantString(elt) {
+				return false
+			}
+			continue
+		}
+		key, ok := kv.Key.(*goast.Ident)
+		if !ok {
+			return false
+		}
+		switch key.Name {
+		case "Call", "CallInline", "Function":
+			if !isConstantString(kv.Value) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isSafeScriptValue は、JS として評価される属性の値が、中身にかかわらずコードを
+// 注入できない形かを判定する。
+//
+//   - templ.JSONString(v): JSON は JavaScript の式としてはデータでしかない
+//     (ES2019 以降 JSON は JS の部分集合)。hx-vals / hx-headers の "js:" にもならない
+//     (出力は { [ " 数字 true false null のどれかで始まる)。ただし hx-trigger は
+//     JS ではなく独自の文法で、値の一部だけがフィルタとして評価されるので対象外。
+//   - templ.JSFuncCall("name", args...): templ が on* / hx-on:* 属性に対して出力する
+//     安全な関数呼び出し。引数は JSON エンコードされる。関数名は templ が識別子の形かを
+//     検査するだけで eval なども通すので、関数名が文字列リテラルのときだけ許可する。
+//     templ がこの特別扱いをするのは書かれた属性名が "on" か "hx-on:" で始まるときだけ
+//     (generator.isScriptAttribute) なので、それ以外の属性 (@click など) では許可しない。
+//   - templ.JSUnsafeFuncCall(x) / templ.JSExpression(x) / templ.ComponentScript{...}:
+//     引数やフィールドがリテラルなら開発者が書いた JS、そうでなければ escape-bypass が
+//     報告するので、ここでは二重に報告しない。
+func isSafeScriptValue(tn templNames, rawName, normalized, src string) bool {
+	e, err := goparser.ParseExpr(src)
+	if err != nil {
+		return false
+	}
+	switch e := unparen(e).(type) {
+	case *goast.CompositeLit:
+		name, ok := tn.templFunc(e.Type)
+		return ok && name == "ComponentScript"
+	case *goast.CallExpr:
+		fn, ok := tn.templFunc(e.Fun)
+		if !ok {
+			return false
+		}
+		switch fn {
+		case "JSONString":
+			return normalized != "hx-trigger"
+		case "JSFuncCall":
+			return isTemplScriptAttr(rawName) && len(e.Args) > 0 && isConstantString(e.Args[0])
+		case "JSUnsafeFuncCall", "JSExpression":
+			return true
+		}
+	}
+	return false
+}
+
+// isTemplScriptAttr は templ が値を templ.ComponentScript として扱う属性か判定する。
+// templ の generator.isScriptAttribute と同じ (大文字小文字を区別する前方一致)。
+func isTemplScriptAttr(rawName string) bool {
+	return strings.HasPrefix(rawName, "on") || strings.HasPrefix(rawName, "hx-on:")
 }
 
 // isTemplCall は式が templ の指定関数の呼び出しか判定する。
