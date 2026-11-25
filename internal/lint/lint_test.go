@@ -140,9 +140,10 @@ func TestLintPathsDirectory(t *testing.T) {
 	// evasion: 36 (data-x-init は -alpine-prefix なしでは対象外),
 	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない),
 	// csp: 2 (-csp なしではセキュリティの検査だけ), ignores: 4,
-	// sanitizer: 2 (別名の other.HTML と偽の bluemonday)
-	if len(findings) != 67 {
-		t.Errorf("total findings from directory walk: got %d, want 67", len(findings))
+	// sanitizer: 3 (別名の other.HTML と偽の bluemonday、AllowDataAttributes),
+	// policy/*.go: 5 (sanitizer-policy)
+	if len(findings) != 73 {
+		t.Errorf("total findings from directory walk: got %d, want 73", len(findings))
 	}
 }
 
@@ -518,5 +519,46 @@ func TestTrimRecursiveSuffix(t *testing.T) {
 		if got := trimRecursiveSuffix(in); got != want {
 			t.Errorf("trimRecursiveSuffix(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestLintGoFilePolicy(t *testing.T) {
+	path := "../../testdata/policy/policy.go"
+	findings, err := (&Linter{}).LintGoFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := expectedRulesByLine(t, path)
+	got := map[uint32][]string{}
+	for _, f := range findings {
+		got[f.Line] = append(got[f.Line], f.Rule)
+	}
+	for line, rule := range want {
+		if len(got[line]) != 1 || got[line][0] != rule {
+			t.Errorf("line %d: got %v, want [%s]", line, got[line], rule)
+		}
+	}
+	for line, rules := range got {
+		if _, ok := want[line]; !ok {
+			t.Errorf("line %d: unexpected findings %v", line, rules)
+		}
+	}
+
+	other, err := (&Linter{}).LintGoFile("../../testdata/policy/notbluemonday.go")
+	if err != nil || len(other) != 0 {
+		t.Errorf("file without bluemonday: got %v, %v", other, err)
+	}
+}
+
+// .go ファイルだけを明示した場合は .templ がなくてもエラーにしない。
+// ディレクトリに .templ がない場合は、指定間違いを疑ってエラーにする。
+func TestLintPathsGoOnly(t *testing.T) {
+	l := &Linter{}
+	findings, err := l.LintPaths([]string{"../../testdata/policy/policy.go"})
+	if err != nil || len(findings) != 5 {
+		t.Errorf("explicit .go file: got %d findings, err %v", len(findings), err)
+	}
+	if _, err := l.LintPaths([]string{"../../testdata/policy"}); err == nil {
+		t.Error("directory without .templ files: want error")
 	}
 }

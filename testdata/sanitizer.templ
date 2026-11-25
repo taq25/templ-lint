@@ -17,3 +17,10 @@ templ Sanitizer(u string) {
 	// bluemonday という名前の別パッケージは許可しない
 	@templ.Raw(bluemonday.UGCPolicy().Sanitize(u))  // escape-bypass
 }
+
+// .templ の中で組み立てたポリシーも検査する
+func strictPolicy() *bm.Policy {
+	p := bm.NewPolicy()
+	p.AllowDataAttributes()                         // sanitizer-policy
+	return p
+}

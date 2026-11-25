@@ -45,14 +45,22 @@ func (l *Linter) normalizer() AttrNormalizer {
 }
 
 // LintPaths はファイルまたはディレクトリ (再帰的に *.templ を収集) を検査する。
+// .go ファイルは bluemonday のポリシー (sanitizer-policy) だけを検査する。
 func (l *Linter) LintPaths(paths []string) ([]Finding, error) {
-	files, err := collectTemplFiles(paths)
+	templFiles, goFiles, err := collectFiles(paths)
 	if err != nil {
 		return nil, err
 	}
 	var findings []Finding
-	for _, f := range files {
+	for _, f := range templFiles {
 		fs, err := l.LintFile(f)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, fs...)
+	}
+	for _, f := range goFiles {
+		fs, err := l.LintGoFile(f)
 		if err != nil {
 			return nil, err
 		}
@@ -370,13 +378,13 @@ func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.E
 	l.checkGoSnippet(path, tn, n.Expression, findings)
 }
 
-// collectTemplFiles は引数のファイル・ディレクトリ・glob から *.templ を集める。
+// collectFiles は引数のファイル・ディレクトリ・glob から *.templ と *.go を集める。
+// .go は templ の生成コード (*_templ.go) とテスト (*_test.go) を除く。
 //
 //   - "./..." や "views/..." のような Go 流の指定は、そのディレクトリ以下の再帰と同じ
 //   - ディレクトリをたどるときは vendor / node_modules / 隠しディレクトリ (.git など) に
 //     入らない (引数で直接指定したディレクトリは、名前にかかわらずたどる)
-func collectTemplFiles(paths []string) ([]string, error) {
-	var files []string
+func collectFiles(paths []string) (templFiles, goFiles []string, err error) {
 	seen := map[string]bool{}
 	for _, p := range paths {
 		p = trimRecursiveSuffix(p)
@@ -395,20 +403,45 @@ func collectTemplFiles(paths []string) ([]string, error) {
 					}
 					return nil
 				}
-				if strings.HasSuffix(path, ".templ") && !seen[path] {
-					seen[path] = true
-					files = append(files, path)
+				if seen[path] {
+					return nil
 				}
+				switch {
+				case strings.HasSuffix(path, ".templ"):
+					templFiles = append(templFiles, path)
+				case isLintableGoFile(path):
+					goFiles = append(goFiles, path)
+				default:
+					return nil
+				}
+				seen[path] = true
 				return nil
 			}); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 	}
-	if len(files) == 0 {
-		return nil, goerr.New("no .templ files found", goerr.V("paths", paths))
+	// パスの指定間違いで黙って 0 件にならないよう、.templ が 1 つもなければエラーにする
+	// (.go ファイルだけを明示的に指定した場合を除く)。
+	if len(templFiles) == 0 && (len(goFiles) == 0 || !allGoFiles(paths)) {
+		return nil, nil, goerr.New("no .templ files found", goerr.V("paths", paths))
 	}
-	return files, nil
+	return templFiles, goFiles, nil
+}
+
+func allGoFiles(paths []string) bool {
+	for _, p := range paths {
+		if !strings.HasSuffix(p, ".go") {
+			return false
+		}
+	}
+	return true
+}
+
+// collectTemplFiles は collectFiles のうち *.templ だけを返す。
+func collectTemplFiles(paths []string) ([]string, error) {
+	files, _, err := collectFiles(paths)
+	return files, err
 }
 
 // trimRecursiveSuffix は "./..." / "dir/..." を "." / "dir" にする。

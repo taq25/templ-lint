@@ -106,6 +106,16 @@ func isMajorVersion(s string) bool {
 	return true
 }
 
+// importsPath はファイルが指定の import パスを import しているかを返す。
+func (tn templNames) importsPath(path string) bool {
+	for _, p := range tn.imports {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
 // importedFrom は識別子が指定の import パスのパッケージを指すかを返す。
 // import の一覧にない識別子は判定できないので known=false を返す。
 func (tn templNames) importedFrom(name, path string) (match, known bool) {
@@ -287,6 +297,15 @@ func (l *Linter) checkGoSnippet(path string, tn templNames, expr parser.Expressi
 			File: path, Line: line, Col: col,
 			Rule: RuleEscapeBypass, Severity: SeverityError,
 			Message: msg,
+		})
+	}
+	if tn.importsPath(bluemondayImportPath) {
+		l.checkSanitizerPolicy(snip.root, func(pos token.Pos, msg string) {
+			line, col := snip.position(expr.Range, pos)
+			*findings = append(*findings, Finding{
+				File: path, Line: line, Col: col,
+				Rule: RuleSanitizerPolicy, Severity: SeverityWarning, Message: msg,
+			})
 		})
 	}
 	called := map[goast.Expr]bool{}
