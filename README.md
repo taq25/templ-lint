@@ -62,6 +62,7 @@ templ-lint -format json -strict ./views
 | `-htmx-prefix prefix` | Extra prefix htmx treats as `hx-` (`htmx.config.prefix`, e.g. `data-boost-`). `data-hx-` is always recognized. Repeatable. |
 | `-alpine-prefix prefix` | Extra prefix Alpine treats as `x-` (`Alpine.prefix`, e.g. `data-x-`). Not set by default, since `data-x-*` is also an ordinary data attribute. Repeatable. |
 | `-htmx 2\|4` | Target htmx major version. Enables checks whose meaning differs between versions (`hx-disable` / `hx-ignore`; `hx-confirm` only evaluates `js:` in htmx 4). Unset: those checks are skipped or fail safe. |
+| `-csp strict` | Assume a strict Content-Security-Policy (`script-src` without `'unsafe-inline'` / `'unsafe-eval'`) and warn about code it would silently block (`csp-*` rules). Security checks are the same with or without it. |
 | `-format text\|json` | Output format (default `text`). |
 | `-strict` | Exit non-zero on WARNING findings too. |
 | `-version` | Print version and exit. |
@@ -86,6 +87,23 @@ Exit codes: `0` no findings / `1` findings (ERROR always; WARNING only with
 | `unsafe-target-blank` | `target="_blank"` without `rel="noopener"` — reverse tabnabbing (CWE-1022) | WARNING |
 | `missing-sri` | Cross-origin `<script>` / `<link rel=stylesheet>` without an `integrity` attribute — supply-chain risk (CWE-353) | WARNING |
 | `invalid-ignore` | `templ-lint:ignore` directive without a reason | WARNING |
+
+### CSP compatibility (`-csp strict`)
+
+These rules find code that does not run under a strict CSP. They are
+compatibility checks, not vulnerability checks, so they are warnings (use
+`-strict` to fail on them). The security rules above are **not** relaxed when
+a CSP is assumed: a CSP is a safety net that can be misconfigured or missing.
+Dynamic values that already trigger a security rule are not reported again.
+
+| Rule | Detects | Severity |
+|---|---|---|
+| `csp-inline-handler` | Inline event handlers (`onclick="..."`, including `templ.JSFuncCall` / `templ.ComponentScript` values) and static `javascript:` URLs. Nonces do not apply to them | WARNING |
+| `csp-eval-attr` | Static htmx values that htmx runs through `eval` / `new Function`: `hx-on*`, `hx-trigger` event filters (`click[ctrlKey]`), `js:` in `hx-vals` / `hx-headers` / `hx-confirm` / `hx-request`, `hx-vars` | WARNING |
+| `csp-inline-script` | Inline `<script>` without a `nonce` (templ only adds nonces to `script` templates and `templ.JSONScript`, not to plain `<script>`), and static `nonce="..."` values. Data blocks such as `type="application/json"` are ignored | WARNING |
+
+Alpine expressions are not checked: what the Alpine CSP build accepts depends
+on its version.
 
 ### Attribute name normalization
 
@@ -245,7 +263,8 @@ passing.
   it matches the sanitizer allowlist, even if it was sanitized elsewhere.
 - Static analysis cannot see runtime values; combine with runtime hardening:
   - A CSP header without `unsafe-eval`, and the
-    [Alpine.js CSP build](https://alpinejs.dev/advanced/csp).
+    [Alpine.js CSP build](https://alpinejs.dev/advanced/csp). Run with
+    `-csp strict` to find templates that such a CSP would break.
   - htmx 2: `htmx.config.allowEval = false` and
     `htmx.config.selfRequestsOnly = true` (the default).
   - htmx 4: `allowEval` and `selfRequestsOnly` were removed. Requests are

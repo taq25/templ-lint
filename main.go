@@ -40,6 +40,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		htmxPrefix  stringsFlag
 		alpinePref  stringsFlag
 		htmxVersion int
+		csp         string
 	)
 	fs := flag.NewFlagSet("templ-lint", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -54,11 +55,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"extra attribute prefix that Alpine treats as x- (Alpine.prefix, e.g. data-x-); repeatable")
 	fs.IntVar(&htmxVersion, "htmx", 0,
 		"htmx major version (2 or 4); enables checks whose meaning differs between versions (hx-disable / hx-ignore, hx-confirm)")
+	fs.StringVar(&csp, "csp", "",
+		"assumed Content-Security-Policy: \"strict\" warns about code that a CSP without 'unsafe-inline'/'unsafe-eval' blocks (inline handlers, hx-on, inline <script> without nonce); security checks are not relaxed")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if htmxVersion != 0 && htmxVersion != 2 && htmxVersion != 4 {
 		fmt.Fprintf(stderr, "templ-lint: -htmx must be 2 or 4, got %d\n", htmxVersion)
+		return 2
+	}
+
+	if csp != lint.CSPNone && csp != lint.CSPStrict {
+		fmt.Fprintf(stderr, "templ-lint: -csp must be \"strict\" or empty, got %q\n", csp)
 		return 2
 	}
 
@@ -77,6 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		HTMXPrefixes:      htmxPrefix,
 		AlpinePrefixes:    alpinePref,
 		HTMXVersion:       htmxVersion,
+		CSP:               csp,
 	}
 	findings, err := l.LintPaths(paths)
 	if err != nil {

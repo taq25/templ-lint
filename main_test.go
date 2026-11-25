@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -138,5 +139,21 @@ func TestHTMXVersionFlagValidation(t *testing.T) {
 	stderr.Reset()
 	if code := run([]string{"-htmx", "4", "-allow-sanitizer", "sanitize.HTML", "testdata/safe.templ"}, &stdout, &stderr); code != 0 {
 		t.Errorf("exit = %d, want 0 (stderr: %s)", code, stderr.String())
+	}
+}
+
+func TestCSPFlagValidation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-csp", "lax", "testdata/safe.templ"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	// CSP の互換性の検査は警告なので、-strict がなければ終了コードは 0
+	if code := run([]string{"-csp", "strict", "-allow-sanitizer", "sanitize.HTML", "testdata/safe.templ"}, &stdout, &stderr); code != 0 {
+		t.Errorf("exit = %d, want 0 (stderr: %s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "csp-inline-handler") {
+		t.Errorf("expected csp-inline-handler warning, got:\n%s", stdout.String())
 	}
 }

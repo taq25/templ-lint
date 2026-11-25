@@ -1,0 +1,35 @@
+package testdata
+
+// -csp strict で検査する。行末コメントは期待するルール。
+// セキュリティの検査は CSP の有無で変わらない (動的な値は従来どおり js-eval-attr)。
+templ CSP(ctx context.Context, u string, id string) {
+	// インラインのイベントハンドラは nonce の対象外なので strict CSP で止まる
+	<button onclick="save()">save</button>                    // csp-inline-handler
+	<button onClick={ templ.JSFuncCall("save", id) }>save</button> // csp-inline-handler
+	<button onclick={ u }>x</button>                          // js-eval-attr
+	<a href="javascript:void(0)">x</a>                         // csp-inline-handler
+	<a href={ "JavaScript:" + "go()" }>x</a>                  // csp-inline-handler
+	<img src="/a.png" onerror="fallback(this)"/>              // csp-inline-handler
+	// htmx が eval で評価する属性
+	<div hx-on:click="count++">x</div>                        // csp-eval-attr
+	<div data-hx-on--after-request="done()">x</div>           // csp-eval-attr
+	<div hx-trigger="click[ctrlKey]">x</div>                  // csp-eval-attr
+	<div hx-vals='js:{"t": Date.now()}'>x</div>               // csp-eval-attr
+	<div hx-vars="a:1">x</div>                                // csp-eval-attr
+	<div hx-on:click={ u }>x</div>                            // js-eval-attr
+	// インラインの <script>
+	<script>init()</script>                                   // csp-inline-script
+	<script type="module">init()</script>                     // csp-inline-script
+	<script nonce="abc123">init()</script>                    // csp-inline-script
+	// strict CSP で動く書き方
+	<script nonce={ templ.GetNonce(ctx) }>init()</script>
+	<script src="/static/app.js"></script>
+	<script type="application/json">{"a":1}</script>
+	<script type="text/hyperscript"></script>
+	<div hx-trigger="click, keyup delay:500ms">x</div>
+	<div hx-vals='{"a": 1}'>x</div>
+	<div hx-confirm="Delete?">x</div>
+	<a href="/home">home</a>
+	<button data-action="save">save</button>
+	<div x-data="counter"><button @click="inc">+</button></div>
+}

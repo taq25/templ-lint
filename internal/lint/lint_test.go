@@ -137,8 +137,8 @@ func TestLintPathsDirectory(t *testing.T) {
 	// dangerous: 12, safe: 0, suppressed: 2, elements: 3, urlattr: 3,
 	// evasion: 36 (data-x-init は -alpine-prefix なしでは対象外),
 	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない)
-	if len(findings) != 59 {
-		t.Errorf("total findings from directory walk: got %d, want 59", len(findings))
+	if len(findings) != 61 {
+		t.Errorf("total findings from directory walk: got %d, want 61", len(findings))
 	}
 }
 
@@ -186,6 +186,7 @@ func TestAnnotatedTestdata(t *testing.T) {
 		{"evasion.templ", &Linter{AlpinePrefixes: []string{"data-x-"}}},
 		{"htmx4.templ", &Linter{HTMXVersion: htmxVersion4, AllowedSanitizers: []string{"sanitize.HTML"}}},
 		{"htmx2.templ", &Linter{HTMXVersion: htmxVersion2, AllowedSanitizers: []string{"sanitize.HTML"}}},
+		{"csp.templ", &Linter{CSP: CSPStrict}},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
@@ -275,6 +276,40 @@ var knownRules = map[string]bool{
 	RuleDynAttrName: true, RuleTabnabbing: true, RuleMissingSRI: true, RuleInvalidIgnore: true,
 	RuleUnvettedAttr: true, RuleUnsafeURLAttr: true, RuleSrcdocAttr: true,
 	RuleHTMXConfigMeta: true, RuleHTMXDisableSemantics: true,
+	RuleCSPInlineHandler: true, RuleCSPEvalAttr: true, RuleCSPInlineScript: true,
+}
+
+// -csp を指定しなければ CSP の互換性の検査は行わない (セキュリティの検査だけが残る)。
+func TestCSPUnspecified(t *testing.T) {
+	findings, err := (&Linter{}).LintFile("../../testdata/csp.templ")
+	if err != nil {
+		t.Fatalf("LintFile failed: %v", err)
+	}
+	got := map[string]int{}
+	for _, f := range findings {
+		got[f.Rule]++
+	}
+	want := map[string]int{RuleJSEvalAttr: 2}
+	if len(got) != len(want) || got[RuleJSEvalAttr] != 2 {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestIsJavaScriptURL(t *testing.T) {
+	cases := map[string]bool{
+		"javascript:void(0)":  true,
+		" JavaScript:x":       true,
+		"java\tscript:x":      true,
+		"java\nscript:x":      true,
+		"/javascript:x":       false,
+		"https://example.com": false,
+		"#":                   false,
+	}
+	for in, want := range cases {
+		if got := isJavaScriptURL(in); got != want {
+			t.Errorf("isJavaScriptURL(%q) = %v, want %v", in, got, want)
+		}
+	}
 }
 
 func TestNormalize(t *testing.T) {
