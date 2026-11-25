@@ -34,6 +34,10 @@ type Linter struct {
 	// バージョンによって意味が変わる検査 (hx-disable / hx-ignore, hx-confirm) は
 	// 安全側に倒すか行わない。
 	HTMXVersion int
+	// CSP は前提とする Content-Security-Policy。CSPStrict ("strict") なら、script-src に
+	// 'unsafe-inline' も 'unsafe-eval' も付けない CSP の下で動かない書き方を警告する。
+	// セキュリティの検査は CSP の有無で変えない。
+	CSP string
 }
 
 func (l *Linter) normalizer() AttrNormalizer {
@@ -105,17 +109,21 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 		element = strings.ToLower(n.Name)
 		l.checkElement(path, n, &findings)
 		l.checkHTMXElement(path, tn, n, &findings)
+		l.checkCSPElement(path, tn, n.Attributes, &findings)
 		return prevElement(n)
 	}
 	prevScriptElement := v.ScriptElement
 	v.ScriptElement = func(n *parser.ScriptElement) error {
 		element = "script"
 		l.checkScript(path, n, &findings)
+		l.checkCSPElement(path, tn, n.Attributes, &findings)
+		l.checkCSPScript(path, n, &findings)
 		return prevScriptElement(n)
 	}
 	prevRawElement := v.RawElement
 	v.RawElement = func(n *parser.RawElement) error {
 		element = strings.ToLower(n.Name)
+		l.checkCSPElement(path, tn, n.Attributes, &findings)
 		return prevRawElement(n)
 	}
 

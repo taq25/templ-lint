@@ -34,4 +34,9 @@ const (
 
 	RuleHTMXConfigMeta       = "htmx-config-meta"       // <meta name="htmx-config"> への動的値
 	RuleHTMXDisableSemantics = "htmx-disable-semantics" // htmx 2/4 で意味が入れ替わった hx-disable / hx-ignore
+
+	// -csp strict のときだけ有効な互換性の検査 (strict CSP の下で動かない書き方)
+	RuleCSPInlineHandler = "csp-inline-handler" // インラインのイベントハンドラ / javascript: URL
+	RuleCSPEvalAttr      = "csp-eval-attr"      // htmx が eval で評価する属性 (hx-on, hx-trigger のフィルタ, js:)
+	RuleCSPInlineScript  = "csp-inline-script"  // nonce のないインライン <script> / 静的な nonce
 )

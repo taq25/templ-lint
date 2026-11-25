@@ -42,6 +42,7 @@ templ-lint -format json -strict ./views                # JSON 出力 / WARNING �
 | `-htmx-prefix prefix` | htmx が `hx-` と同じに扱う追加の接頭辞 (`htmx.config.prefix`、例 `data-boost-`)。`data-hx-` は常に認識 (繰り返し指定可) |
 | `-alpine-prefix prefix` | Alpine が `x-` と同じに扱う追加の接頭辞 (`Alpine.prefix`、例 `data-x-`)。`data-x-*` はふつうのデータ属性でもあるので既定では無効 (繰り返し指定可) |
 | `-htmx 2\|4` | 対象の htmx のメジャーバージョン。バージョンで意味が変わる検査を有効にする (`hx-disable` / `hx-ignore`、`hx-confirm` が `js:` を評価するのは htmx 4 のみ)。未指定ならそれらは行わないか安全側に倒す |
+| `-csp strict` | 厳格な CSP (`script-src` に `'unsafe-inline'` も `'unsafe-eval'` も付けない) を前提に、その下で黙って動かなくなる書き方を警告する (`csp-*` ルール)。セキュリティの検査は指定の有無で変わらない |
 | `-format text\|json` | 出力形式 (デフォルト text) |
 | `-strict` | WARNING でも非ゼロ終了 |
 | `-version` | バージョン表示 |
@@ -65,6 +66,21 @@ templ-lint -format json -strict ./views                # JSON 出力 / WARNING �
 | `unsafe-target-blank` | `target="_blank"` に `rel="noopener"` がない — reverse tabnabbing (CWE-1022) | WARNING |
 | `missing-sri` | クロスオリジンの `<script>` / `<link rel=stylesheet>` に `integrity` がない — サプライチェーンリスク (CWE-353) | WARNING |
 | `invalid-ignore` | 理由のない `templ-lint:ignore` | WARNING |
+
+### CSP との互換性 (`-csp strict`)
+
+厳格な CSP の下で動かない書き方を見つける。脆弱性ではなく互換性の検査なので WARNING
+(`-strict` で失敗扱いにできる)。CSP を前提にしても上のセキュリティの検査は**緩めない**。
+CSP は設定ミスや付け忘れがあり得る保険だからだ。セキュリティのルールで既に報告される
+動的な値は重ねて報告しない。
+
+| ルール | 検出内容 | 重大度 |
+|---|---|---|
+| `csp-inline-handler` | インラインのイベントハンドラ (`onclick="..."`、値が `templ.JSFuncCall` / `templ.ComponentScript` の場合を含む) と静的な `javascript:` URL。どちらも nonce の対象外 | WARNING |
+| `csp-eval-attr` | htmx が `eval` / `new Function` で評価する静的な値: `hx-on*`、`hx-trigger` のイベントフィルタ (`click[ctrlKey]`)、`hx-vals` / `hx-headers` / `hx-confirm` / `hx-request` の `js:`、`hx-vars` | WARNING |
+| `csp-inline-script` | `nonce` のないインライン `<script>` (templ が nonce を自動で付けるのは `script` テンプレートと `templ.JSONScript` だけで、普通の `<script>` には付かない) と、静的な `nonce="..."`。`type="application/json"` などのデータブロックは対象外 | WARNING |
+
+Alpine の式は検査しない。Alpine の CSP ビルドが受け付ける式はバージョンで変わるため。
 
 XSS 以外に、テンプレート構造から見える非 XSS の問題も検出する (reverse tabnabbing、
 外部リソースの SRI 欠如)。ハンドラ側ロジックに存在する脆弱性 (SQL インジェクション、
@@ -148,7 +164,8 @@ templ コンパイラと同じパーサにリンクしているため、templ �
 - 検査対象は `.templ` のみ。手書き `.go` 内の `templ.Raw` は対象外
 - taint 追跡はしない。非リテラルは許可リスト外なら一律検知 (安全側の誤検知)
 - 静的解析は実行時の値を見られないため、ランタイム側の無害化を併用する:
-  - `unsafe-eval` を含まない CSP ヘッダと [Alpine.js CSP ビルド](https://alpinejs.dev/advanced/csp)
+  - `unsafe-eval` を含まない CSP ヘッダと [Alpine.js CSP ビルド](https://alpinejs.dev/advanced/csp)。
+    `-csp strict` で、その CSP の下で動かなくなるテンプレートを洗い出せる
   - htmx 2: `htmx.config.allowEval = false`、`htmx.config.selfRequestsOnly = true` (デフォルト)
   - htmx 4: `allowEval` と `selfRequestsOnly` は削除された。リクエスト先は
     `htmx.config.mode = "same-origin"` (デフォルト。要素ごとの `hx-config` では上書きできない) で制限される。
