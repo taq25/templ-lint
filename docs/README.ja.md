@@ -34,16 +34,20 @@ go install github.com/taq25/templ-lint@latest
 templ-lint ./views                                     # 再帰的に *.templ を検査
 templ-lint -allow-sanitizer sanitize.HTML ./views      # サニタイズラッパーを許可
 templ-lint -format json -strict ./views                # JSON 出力 / WARNING も失敗扱い
+templ-lint -format sarif ./... > templ-lint.sarif      # Go 流の再帰指定 / GitHub code scanning 用の SARIF
 ```
+
+ディレクトリは再帰的にたどる (`./...` も可)。`vendor`・`node_modules`・隠しディレクトリは、直接指定しない限り
+たどらない。`.go` ファイルは `sanitizer-policy` の検査にだけ使う (生成コードの `*_templ.go` と `*_test.go` は除く)。
 
 | フラグ | 説明 |
 |---|---|
-| `-allow-sanitizer pkg.Func` | `templ.Raw(pkg.Func(x))` を許可 (繰り返し指定可) |
+| `-allow-sanitizer pkg.Func` | `templ.Raw(pkg.Func(x))` を許可。import パス形式 (`example.com/app/sanitize.HTML`) なら同名の別パッケージを許可しない (繰り返し指定可) |
 | `-htmx-prefix prefix` | htmx が `hx-` と同じに扱う追加の接頭辞 (`htmx.config.prefix`、例 `data-boost-`)。`data-hx-` は常に認識 (繰り返し指定可) |
 | `-alpine-prefix prefix` | Alpine が `x-` と同じに扱う追加の接頭辞 (`Alpine.prefix`、例 `data-x-`)。`data-x-*` はふつうのデータ属性でもあるので既定では無効 (繰り返し指定可) |
 | `-htmx 2\|4` | 対象の htmx のメジャーバージョン。バージョンで意味が変わる検査を有効にする (`hx-disable` / `hx-ignore`、`hx-confirm` が `js:` を評価するのは htmx 4 のみ)。未指定ならそれらは行わないか安全側に倒す |
 | `-csp strict` | 厳格な CSP (`script-src` に `'unsafe-inline'` も `'unsafe-eval'` も付けない) を前提に、その下で黙って動かなくなる書き方を警告する (`csp-*` ルール)。セキュリティの検査は指定の有無で変わらない |
-| `-format text\|json` | 出力形式 (デフォルト text) |
+| `-format text\|json\|sarif` | 出力形式 (デフォルト text)。`sarif` は GitHub code scanning 用の SARIF 2.1.0 |
 | `-strict` | WARNING でも非ゼロ終了 |
 | `-version` | バージョン表示 |
 
@@ -65,7 +69,9 @@ templ-lint -format json -strict ./views                # JSON 出力 / WARNING �
 | `spread-attr` | スプレッド属性 (`{ attrs... }`) | WARNING |
 | `unsafe-target-blank` | `target="_blank"` に `rel="noopener"` がない — reverse tabnabbing (CWE-1022) | WARNING |
 | `missing-sri` | クロスオリジンの `<script>` / `<link rel=stylesheet>` に `integrity` がない — サプライチェーンリスク (CWE-353) | WARNING |
-| `invalid-ignore` | 理由のない `templ-lint:ignore` | WARNING |
+| `sanitizer-policy` | フロントエンドが反応する属性を残す bluemonday ポリシー (`.go` ファイルと `.templ` 内の Go コード): `AllowDataAttributes()` (htmx は `data-hx-*` を `hx-*` と同じに扱う)、`AllowAttrs("onclick" / "x-data" / "@click" / "hx-get" / "data-hx-get" ...)`、`AllowUnsafe(true)` | WARNING |
+| `invalid-ignore` | 理由のない、または存在しないルール名を書いた `templ-lint:ignore` | WARNING |
+| `unused-ignore` | 何も抑制していない `templ-lint:ignore` (`-csp strict` なしの `csp-*` のように、今の設定では出ないルールの抑制は報告しない) | WARNING |
 
 ### CSP との互換性 (`-csp strict`)
 
@@ -127,7 +133,13 @@ htmx と Alpine の名前空間では「安全と確認済みの属性だけを�
 
 - `templ.Raw("<hr/>")` — 静的リテラルは許可
 - `templ.Raw(bluemonday.UGCPolicy().Sanitize(x))` — bluemonday チェーンは常に許可
-- `templ.Raw(sanitize.HTML(x))` — `-allow-sanitizer sanitize.HTML` 指定時のみ許可
+- `templ.Raw(sanitize.HTML(x))` — `-allow-sanitizer sanitize.HTML` 指定時のみ許可。
+  この形式はローカル名が `sanitize` のパッケージなら何でも通すので、
+  `-allow-sanitizer example.com/app/sanitize.HTML` (ファイルの import と突き合わせる) を推奨
+- bluemonday チェーンも import と突き合わせる。別名 (`bm "github.com/microcosm-cc/bluemonday"`) は許可し、
+  `bluemonday` という名前の別パッケージは許可しない
+- ポリシーの中身は `sanitizer-policy` が代表的な誤り (`AllowDataAttributes()`、`on*` / `x-*` / `hx-*` の許可、
+  `AllowUnsafe(true)`) を検査する
 - `p.Sanitize(x)` (変数に格納したポリシー) は**不許可** — AST では `p` の由来を
   検証できず、`Sanitize` という名前のメソッドなら何でも通る抜け穴になるため。
   チェーン形式か、bluemonday ポリシーを 1 箇所に集約したラッパー関数を使うこと
@@ -143,6 +155,8 @@ htmx と Alpine の名前空間では「安全と確認済みの属性だけを�
 ```
 
 HTML コメント形式 (`<!-- templ-lint:ignore ... -->`)、カンマ区切りの複数ルール指定も可。
+存在しないルール名は `invalid-ignore`、何も抑制していないディレクティブは `unused-ignore` として報告するので、
+古い抑制が溜まらない。
 
 ## 仕組み
 
@@ -161,7 +175,7 @@ templ コンパイラと同じパーサにリンクしているため、templ �
 
 ## 制約と併用すべきランタイム対策
 
-- 検査対象は `.templ` のみ。手書き `.go` 内の `templ.Raw` は対象外
+- XSS の検査対象は `.templ` のみ。`.go` は bluemonday ポリシーの検査にだけ使い、手書き `.go` 内の `templ.Raw` は対象外
 - taint 追跡はしない。非リテラルは許可リスト外なら一律検知 (安全側の誤検知)
 - 静的解析は実行時の値を見られないため、ランタイム側の無害化を併用する:
   - `unsafe-eval` を含まない CSP ヘッダと [Alpine.js CSP ビルド](https://alpinejs.dev/advanced/csp)。
