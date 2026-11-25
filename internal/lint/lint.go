@@ -80,7 +80,7 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 		return nil, goerr.Wrap(err, "failed to parse templ file", goerr.V("path", path))
 	}
 	var findings []Finding
-	var ignores []ignoreDirective
+	var ignores []*ignoreDirective
 	tn := collectTemplNames(tf)
 
 	// 属性の検査には要素名が要る (templ が URL をサニタイズするかは要素と属性の組で決まる)。
@@ -190,7 +190,7 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 	if err := tf.Visit(v); err != nil {
 		return nil, goerr.Wrap(err, "failed to visit templ AST", goerr.V("path", path))
 	}
-	return applyIgnores(findings, ignores), nil
+	return l.applyIgnores(path, findings, ignores), nil
 }
 
 // ignoreDirective は理由付き抑制コメント 1 件。
@@ -198,36 +198,52 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 type ignoreDirective struct {
 	fromLine uint32 // 1 始まり
 	toLine   uint32
-	rules    map[string]bool
+	col      uint32
+	rules    []string        // 書かれた順 (未使用の報告を安定させるため)
+	used     map[string]bool // 実際に検出を抑制したルール
 }
 
-func collectIgnore(path, contents string, r parser.Range, ignores *[]ignoreDirective, findings *[]Finding) {
+func collectIgnore(path, contents string, r parser.Range, ignores *[]*ignoreDirective, findings *[]Finding) {
+	collectIgnoreAt(path, contents, r.From.Line+1, r.To.Line+1, r.From.Col+1, ignores, findings)
+}
+
+// collectIgnoreAt は 1 始まりの行・列で抑制ディレクティブを登録する。
+func collectIgnoreAt(path, contents string, fromLine, toLine, col uint32, ignores *[]*ignoreDirective, findings *[]Finding) {
 	m := ignoreDirectivePattern.FindStringSubmatch(contents)
 	if m == nil {
 		return
 	}
+	add := func(msg string) {
+		*findings = append(*findings, Finding{
+			File: path, Line: fromLine, Col: col,
+			Rule: RuleInvalidIgnore, Severity: SeverityWarning, Message: msg,
+		})
+	}
 	reason := strings.TrimSpace(m[2])
 	if reason == "" {
 		// 理由のない抑制は無効化し、それ自体を報告する
-		*findings = append(*findings, Finding{
-			File: path, Line: r.From.Line + 1, Col: r.From.Col + 1,
-			Rule: RuleInvalidIgnore, Severity: SeverityWarning,
-			Message: "templ-lint:ignore requires a reason (templ-lint:ignore <rule> <why it is safe>); directive is ineffective without one",
-		})
+		add("templ-lint:ignore requires a reason (templ-lint:ignore <rule> <why it is safe>); directive is ineffective without one")
 		return
 	}
-	rules := map[string]bool{}
+	d := &ignoreDirective{fromLine: fromLine, toLine: toLine, col: col, used: map[string]bool{}}
 	for _, id := range strings.Split(m[1], ",") {
-		rules[strings.TrimSpace(id)] = true
+		id = strings.TrimSpace(id)
+		if !IsKnownRule(id) {
+			// 綴り間違いの抑制は黙って何もしないので、それ自体を報告する
+			add(fmt.Sprintf("templ-lint:ignore names unknown rule %q; it suppresses nothing", id))
+			continue
+		}
+		if !slices.Contains(d.rules, id) {
+			d.rules = append(d.rules, id)
+		}
 	}
-	*ignores = append(*ignores, ignoreDirective{
-		fromLine: r.From.Line + 1,
-		toLine:   r.To.Line + 1,
-		rules:    rules,
-	})
+	if len(d.rules) > 0 {
+		*ignores = append(*ignores, d)
+	}
 }
 
-func applyIgnores(findings []Finding, ignores []ignoreDirective) []Finding {
+// applyIgnores は抑制された検出を取り除き、何も抑制しなかったディレクティブを報告する。
+func (l *Linter) applyIgnores(path string, findings []Finding, ignores []*ignoreDirective) []Finding {
 	if len(ignores) == 0 {
 		return findings
 	}
@@ -237,16 +253,45 @@ func applyIgnores(findings []Finding, ignores []ignoreDirective) []Finding {
 			kept = append(kept, f)
 		}
 	}
+	for _, d := range ignores {
+		for _, id := range d.rules {
+			if d.used[id] || !l.ruleActive(id) {
+				continue
+			}
+			kept = append(kept, Finding{
+				File: path, Line: d.fromLine, Col: d.col,
+				Rule: RuleUnusedIgnore, Severity: SeverityWarning,
+				Message: fmt.Sprintf("templ-lint:ignore %s suppresses nothing on this or the next line; remove it", id),
+			})
+		}
+	}
 	return kept
 }
 
-func suppressed(f Finding, ignores []ignoreDirective) bool {
+func suppressed(f Finding, ignores []*ignoreDirective) bool {
+	hit := false
 	for _, d := range ignores {
-		if d.rules[f.Rule] && f.Line >= d.fromLine && f.Line <= d.toLine+1 {
-			return true
+		if slices.Contains(d.rules, f.Rule) && f.Line >= d.fromLine && f.Line <= d.toLine+1 {
+			d.used[f.Rule] = true
+			hit = true
 		}
 	}
-	return false
+	return hit
+}
+
+// ruleActive は現在の設定でルールが検出を出し得るかを返す。
+// 設定次第で出ないルール (-csp strict 専用など) の抑制は、未使用として報告しない。
+func (l *Linter) ruleActive(id string) bool {
+	switch id {
+	case RuleCSPInlineHandler, RuleCSPEvalAttr, RuleCSPInlineScript:
+		return l.CSP == CSPStrict
+	case RuleHTMXDisableSemantics:
+		return l.HTMXVersion != htmxVersionUnknown
+	case RuleInvalidIgnore, RuleUnusedIgnore:
+		// ディレクティブ自体の検出は抑制の対象にならない
+		return false
+	}
+	return true
 }
 
 func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.ExpressionAttribute, findings *[]Finding) {

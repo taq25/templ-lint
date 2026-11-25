@@ -136,9 +136,10 @@ func TestLintPathsDirectory(t *testing.T) {
 	}
 	// dangerous: 12, safe: 0, suppressed: 2, elements: 3, urlattr: 3,
 	// evasion: 36 (data-x-init は -alpine-prefix なしでは対象外),
-	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない)
-	if len(findings) != 61 {
-		t.Errorf("total findings from directory walk: got %d, want 61", len(findings))
+	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない),
+	// csp: 2 (-csp なしではセキュリティの検査だけ), ignores: 4
+	if len(findings) != 65 {
+		t.Errorf("total findings from directory walk: got %d, want 65", len(findings))
 	}
 }
 
@@ -187,6 +188,7 @@ func TestAnnotatedTestdata(t *testing.T) {
 		{"htmx4.templ", &Linter{HTMXVersion: htmxVersion4, AllowedSanitizers: []string{"sanitize.HTML"}}},
 		{"htmx2.templ", &Linter{HTMXVersion: htmxVersion2, AllowedSanitizers: []string{"sanitize.HTML"}}},
 		{"csp.templ", &Linter{CSP: CSPStrict}},
+		{"ignores.templ", &Linter{}},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
@@ -277,6 +279,42 @@ var knownRules = map[string]bool{
 	RuleUnvettedAttr: true, RuleUnsafeURLAttr: true, RuleSrcdocAttr: true,
 	RuleHTMXConfigMeta: true, RuleHTMXDisableSemantics: true,
 	RuleCSPInlineHandler: true, RuleCSPEvalAttr: true, RuleCSPInlineScript: true,
+	RuleUnusedIgnore: true, RuleSanitizerPolicy: true,
+}
+
+// knownRules (テストの注釈で使えるルール) と Rules (公開するルール一覧) を一致させる。
+func TestRulesRegistry(t *testing.T) {
+	if len(Rules) != len(knownRules) {
+		t.Errorf("Rules has %d entries, knownRules has %d", len(Rules), len(knownRules))
+	}
+	for _, r := range Rules {
+		if !knownRules[r.ID] {
+			t.Errorf("rule %s is missing from knownRules", r.ID)
+		}
+		if r.Description == "" || (r.Severity != SeverityError && r.Severity != SeverityWarning) {
+			t.Errorf("rule %s: incomplete entry %+v", r.ID, r)
+		}
+	}
+}
+
+// 未使用の抑制は、そのルールが有効な設定のときだけ報告する。
+func TestUnusedIgnoreRespectsConfig(t *testing.T) {
+	findings, err := (&Linter{CSP: CSPStrict}).LintFile("../../testdata/ignores.templ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, f := range findings {
+		if f.Rule == RuleUnusedIgnore {
+			n++
+		}
+		if f.Rule == RuleCSPInlineHandler {
+			t.Errorf("csp-inline-handler should be suppressed: %+v", f)
+		}
+	}
+	if n != 2 {
+		t.Errorf("unused-ignore: got %d, want 2", n)
+	}
 }
 
 // -csp を指定しなければ CSP の互換性の検査は行わない (セキュリティの検査だけが残る)。
