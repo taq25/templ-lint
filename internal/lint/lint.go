@@ -370,19 +370,33 @@ func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.E
 	l.checkGoSnippet(path, tn, n.Expression, findings)
 }
 
+// collectTemplFiles は引数のファイル・ディレクトリ・glob から *.templ を集める。
+//
+//   - "./..." や "views/..." のような Go 流の指定は、そのディレクトリ以下の再帰と同じ
+//   - ディレクトリをたどるときは vendor / node_modules / 隠しディレクトリ (.git など) に
+//     入らない (引数で直接指定したディレクトリは、名前にかかわらずたどる)
 func collectTemplFiles(paths []string) ([]string, error) {
 	var files []string
+	seen := map[string]bool{}
 	for _, p := range paths {
+		p = trimRecursiveSuffix(p)
 		matches, err := filepath.Glob(p)
 		if err != nil || len(matches) == 0 {
 			matches = []string{p}
 		}
-		for _, m := range matches {
-			if err := filepath.WalkDir(m, func(path string, d fs.DirEntry, err error) error {
+		for _, root := range matches {
+			if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return goerr.Wrap(err, "failed to walk directory", goerr.V("path", path))
 				}
-				if !d.IsDir() && strings.HasSuffix(path, ".templ") {
+				if d.IsDir() {
+					if path != root && skipDir(d.Name()) {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if strings.HasSuffix(path, ".templ") && !seen[path] {
+					seen[path] = true
 					files = append(files, path)
 				}
 				return nil
@@ -395,4 +409,22 @@ func collectTemplFiles(paths []string) ([]string, error) {
 		return nil, goerr.New("no .templ files found", goerr.V("paths", paths))
 	}
 	return files, nil
+}
+
+// trimRecursiveSuffix は "./..." / "dir/..." を "." / "dir" にする。
+func trimRecursiveSuffix(p string) string {
+	if p != "..." && !strings.HasSuffix(p, "/...") && !strings.HasSuffix(p, string(filepath.Separator)+"...") {
+		return p
+	}
+	p = strings.TrimSuffix(p, "...")
+	p = strings.TrimRight(p, "/"+string(filepath.Separator))
+	if p == "" {
+		return "."
+	}
+	return p
+}
+
+// skipDir はディレクトリをたどるときに入らないディレクトリ名か判定する。
+func skipDir(name string) bool {
+	return name == "vendor" || name == "node_modules" || (strings.HasPrefix(name, ".") && name != "." && name != "..")
 }

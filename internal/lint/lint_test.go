@@ -2,7 +2,9 @@ package lint
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -462,6 +464,59 @@ func TestDefaultPackageName(t *testing.T) {
 	for in, want := range cases {
 		if got := defaultPackageName(in); got != want {
 			t.Errorf("defaultPackageName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCollectTemplFilesSkipsDirs(t *testing.T) {
+	root := t.TempDir()
+	for _, f := range []string{
+		"views/a.templ",
+		"views/vendor/b.templ",
+		"node_modules/pkg/c.templ",
+		".git/d.templ",
+		"views/.cache/e.templ",
+		"views/sub/f.templ",
+	} {
+		p := filepath.Join(root, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("package x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{
+		filepath.Join(root, "views", "a.templ"),
+		filepath.Join(root, "views", "sub", "f.templ"),
+	}
+	for _, arg := range []string{root, root + "/...", filepath.Join(root, "views") + "/..."} {
+		got, err := collectTemplFiles([]string{arg, arg}) // 重複した指定は 1 回だけ数える
+		if err != nil {
+			t.Fatalf("%s: %v", arg, err)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: got %v, want %v", arg, got, want)
+		}
+	}
+	// 直接指定した vendor ディレクトリはたどる
+	got, err := collectTemplFiles([]string{filepath.Join(root, "views", "vendor")})
+	if err != nil || len(got) != 1 {
+		t.Errorf("explicit vendor dir: got %v, %v", got, err)
+	}
+}
+
+func TestTrimRecursiveSuffix(t *testing.T) {
+	cases := map[string]string{
+		"./...":     ".",
+		"...":       ".",
+		"views/...": "views",
+		"views":     "views",
+		"a...b":     "a...b",
+	}
+	for in, want := range cases {
+		if got := trimRecursiveSuffix(in); got != want {
+			t.Errorf("trimRecursiveSuffix(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
