@@ -37,6 +37,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		strict      bool
 		showVersion bool
 		sanitizers  stringsFlag
+		htmxPrefix  stringsFlag
+		alpinePref  stringsFlag
+		htmxVersion int
 	)
 	fs := flag.NewFlagSet("templ-lint", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -45,7 +48,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.Var(&sanitizers, "allow-sanitizer",
 		"sanitizer allowed as templ.Raw argument in pkg.Func form (e.g. sanitize.HTML); repeatable")
+	fs.Var(&htmxPrefix, "htmx-prefix",
+		"extra attribute prefix that htmx treats as hx- (htmx.config.prefix, e.g. data-boost-); data-hx- is always recognized; repeatable")
+	fs.Var(&alpinePref, "alpine-prefix",
+		"extra attribute prefix that Alpine treats as x- (Alpine.prefix, e.g. data-x-); repeatable")
+	fs.IntVar(&htmxVersion, "htmx", 0,
+		"htmx major version (2 or 4); enables checks whose meaning differs between versions (hx-disable / hx-ignore, hx-confirm)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if htmxVersion != 0 && htmxVersion != 2 && htmxVersion != 4 {
+		fmt.Fprintf(stderr, "templ-lint: -htmx must be 2 or 4, got %d\n", htmxVersion)
 		return 2
 	}
 
@@ -59,7 +72,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		paths = []string{"."}
 	}
 
-	l := &lint.Linter{AllowedSanitizers: sanitizers}
+	l := &lint.Linter{
+		AllowedSanitizers: sanitizers,
+		HTMXPrefixes:      htmxPrefix,
+		AlpinePrefixes:    alpinePref,
+		HTMXVersion:       htmxVersion,
+	}
 	findings, err := l.LintPaths(paths)
 	if err != nil {
 		fmt.Fprintf(stderr, "templ-lint: %v\n", err)

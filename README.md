@@ -59,6 +59,9 @@ templ-lint -format json -strict ./views
 | Flag | Description |
 |---|---|
 | `-allow-sanitizer pkg.Func` | Allow `templ.Raw(pkg.Func(x))` etc. Repeatable. |
+| `-htmx-prefix prefix` | Extra prefix htmx treats as `hx-` (`htmx.config.prefix`, e.g. `data-boost-`). `data-hx-` is always recognized. Repeatable. |
+| `-alpine-prefix prefix` | Extra prefix Alpine treats as `x-` (`Alpine.prefix`, e.g. `data-x-`). Not set by default, since `data-x-*` is also an ordinary data attribute. Repeatable. |
+| `-htmx 2\|4` | Target htmx major version. Enables checks whose meaning differs between versions (`hx-disable` / `hx-ignore`; `hx-confirm` only evaluates `js:` in htmx 4). Unset: those checks are skipped or fail safe. |
 | `-format text\|json` | Output format (default `text`). |
 | `-strict` | Exit non-zero on WARNING findings too. |
 | `-version` | Print version and exit. |
@@ -70,14 +73,68 @@ Exit codes: `0` no findings / `1` findings (ERROR always; WARNING only with
 
 | Rule | What it catches | Severity |
 |---|---|---|
-| `js-eval-attr` | Dynamic values in attributes that are evaluated as JavaScript: HTML `on*`; Alpine `x-data`, `x-init`, `x-html`, `x-text`, `x-show`, `x-if`, `x-for`, `x-effect`, `x-on:*`, `@*`, `:*`, `x-model*`; htmx `hx-on:*`, `hx-vals`, `hx-headers` | ERROR |
-| `escape-bypass` | Non-literal arguments to `templ.Raw`, `templ.SafeURL`, `templ.JSExpression`, `templ.JSUnsafeFuncCall` — including inside `{{ ... }}` Go code blocks | ERROR |
+| `js-eval-attr` | Dynamic values in attributes that are evaluated as JavaScript: HTML `on*`; every Alpine `x-*` directive except the known non-evaluating ones (see below), plus `@*` and `:*`; htmx `hx-on` / `hx-on:*` / `hx-on::*` / `hx-on-*`, `hx-trigger` (event filters), `hx-vars`; and `hx-vals`, `hx-headers`, `hx-confirm`, `hx-request` unless the value starts with a static literal that cannot become `js:` | ERROR |
+| `unsafe-url-attr` | Dynamic URLs in attributes templ does **not** sanitize: `<iframe/frame/embed/script src>`, `formaction`, `href` outside `<a>`/`<link>` (e.g. `<area>`, `<base>`, SVG), `xlink:href`. templ only sanitizes `a/link[href]`, `form[action]` and `object[data]`. Allowed: `templ.URL(x)`, same-origin relative paths | ERROR |
+| `srcdoc-attr` | Dynamic `srcdoc`: the browser parses it as an HTML document. Allowed: sanitizer calls accepted by `escape-bypass` | ERROR |
+| `escape-bypass` | Non-literal arguments to `templ.Raw`, `templ.SafeURL`, `templ.JSExpression`, `templ.JSUnsafeFuncCall`, `templ.SafeCSS`, `templ.SafeCSSProperty`, and `templ.ComponentScript{...}` literals — including inside `{{ ... }}` blocks and Go code outside templates, through import aliases, and when the function is used as a value (`f := templ.Raw`) | ERROR |
 | `dyn-attr-name` | Dynamic attribute names (`{ name }={ value }`): an attacker-controlled name can become an event handler | ERROR |
-| `url-attr` | Dynamic request targets (`hx-get/post/put/patch/delete`). Relative paths that are statically same-origin (a leading `"/x…"` string literal, e.g. `"/posts/" + id`) are excluded; protocol-relative `//host` and variable-built URLs are still flagged | WARNING |
+| `url-attr` | Dynamic request targets (`hx-get/post/put/patch/delete/query`, `hx-action`) and history URLs (`hx-push-url`, `hx-replace-url`). Relative paths that are statically same-origin (a leading `"/x…"` string literal, e.g. `"/posts/" + id`) are excluded; protocol-relative `//host` and variable-built URLs are still flagged | WARNING |
+| `htmx-config-meta` | Dynamic `content` in `<meta name="htmx-config">`: htmx reads global settings (prefix, extensions, request mode, ...) from it. `templ.JSONString(cfg)` is allowed | ERROR |
+| `htmx-disable-semantics` | With `-htmx 4`: `hx-disable` used the htmx 2 way (no value, or around `templ.Raw` / `{ children... }`). htmx 4 renamed that behavior to `hx-ignore`; `hx-disable` now only disables elements during requests, so the content becomes live. With `-htmx 2`: `hx-ignore`, which htmx 2 does not have | ERROR |
+| `unvetted-attr` | Dynamic values in htmx attributes that templ-lint has not classified (e.g. `hx-config`, `hx-status:*`, `hx-method`, attributes added by future htmx versions) | WARNING |
 | `spread-attr` | Spread attributes (`{ attrs... }`): names and values are decided at runtime | WARNING |
 | `unsafe-target-blank` | `target="_blank"` without `rel="noopener"` — reverse tabnabbing (CWE-1022) | WARNING |
 | `missing-sri` | Cross-origin `<script>` / `<link rel=stylesheet>` without an `integrity` attribute — supply-chain risk (CWE-353) | WARNING |
 | `invalid-ignore` | `templ-lint:ignore` directive without a reason | WARNING |
+
+### Attribute name normalization
+
+Attribute names are normalized before classification, so spelling variants do
+not slip through: names are lowercased (`onClick` = `onclick`), `data-hx-*` and
+the prefixes given by `-htmx-prefix` / `-alpine-prefix` are mapped to `hx-*` /
+`x-*`, and htmx 4 inheritance modifiers (`:inherited`,
+`:append`, and the `-inherited` / `-append` forms) are stripped.
+
+Classification is allowlist-based within the htmx and Alpine namespaces: only
+attributes known not to evaluate their value are exempt. An unknown Alpine
+directive is treated as evaluating JavaScript (`js-eval-attr`), and an unknown
+htmx attribute is reported as `unvetted-attr`, so new attributes in future
+versions fail safe instead of being silently ignored.
+
+- Alpine non-evaluating directives: `x-cloak`, `x-ref`, `x-transition*`,
+  `x-ignore`, `x-teleport`, `x-collapse`, `x-mask` (but not `x-mask:dynamic`).
+- htmx attributes treated as safe: `hx-swap`, `hx-swap-oob`, `hx-boost`,
+  `hx-encoding`, `hx-preserve`, `hx-validate`, `hx-history`, `hx-history-elt`,
+  `hx-prompt`, `hx-inherit`, `hx-disinherit`, `hx-params`, `hx-morph-skip*`,
+  and the selector attributes `hx-target`, `hx-include`, `hx-select`,
+  `hx-select-oob`, `hx-indicator`, `hx-disable`, `hx-disabled-elt`,
+  `hx-ignore`, `hx-sync` (a dynamic selector cannot lead to XSS, and
+  `"#row-" + id` is everyday code).
+
+Values made only of string literals (`x-init={ "load()" }`) are exempt from
+the attribute rules: they are written by the developer, like a static
+attribute.
+
+Values that cannot inject code whatever they contain are also exempt:
+
+- `templ.JSONString(v)` in any JS-evaluating attribute except `hx-trigger`
+  (JSON is data as a JavaScript expression, and never starts with `js:`).
+- `templ.JSFuncCall("name", args...)` in `on*` / `hx-on:*`, where templ renders
+  it as a function call with JSON-encoded arguments. The function name must be
+  a string literal: templ only checks that it looks like an identifier, so a
+  dynamic name could be `eval`.
+
+```
+<button onclick={ templ.JSFuncCall("select", id) }>            // OK
+<div x-data={ templ.JSONString(cfg) }>                          // OK
+<button data-id={ id } hx-on:click="select(this.dataset.id)">   // OK
+```
+
+Note: templ requires `templ.ComponentScript` values for attributes whose name
+starts with `on` or `hx-on:`, so a plain string there does not compile. The
+string-injection risk is in Alpine attributes and in htmx attributes templ does
+not special-case (`hx-on-click`, `data-hx-on:click`, `hx-vals`, ...).
+`templ.ComponentScript{Call: x}` built by hand is reported as `escape-bypass`.
 
 ### Examples
 
@@ -172,9 +229,13 @@ templ-lint combines two official parsers instead of implementing its own:
    sanitizer allowlist).
 
 Because it links against the same parser the templ compiler uses, a templ
-upgrade that changes the AST fails loudly at compile time — there is no silent
-false-negative mode. Keep the `templ` version in this module's `go.mod` aligned
-with your application's.
+upgrade that changes the AST fails loudly at compile time. Keep the `templ`
+version in this module's `go.mod` aligned with your application's.
+
+That guarantee covers templ's syntax only. What an attribute *means* is decided
+by htmx and Alpine, and a parser cannot see that change. The allowlist-based
+classification above is what keeps new or renamed attributes from silently
+passing.
 
 ## Limitations
 
@@ -183,9 +244,17 @@ with your application's.
 - No taint tracking: any non-literal argument to `templ.Raw` is flagged unless
   it matches the sanitizer allowlist, even if it was sanitized elsewhere.
 - Static analysis cannot see runtime values; combine with runtime hardening:
-  the [Alpine.js CSP build](https://alpinejs.dev/advanced/csp), a CSP header
-  without `unsafe-eval`, and `htmx.config.allowEval = false` /
-  `htmx.config.selfRequestsOnly = true`.
+  - A CSP header without `unsafe-eval`, and the
+    [Alpine.js CSP build](https://alpinejs.dev/advanced/csp).
+  - htmx 2: `htmx.config.allowEval = false` and
+    `htmx.config.selfRequestsOnly = true` (the default).
+  - htmx 4: `allowEval` and `selfRequestsOnly` were removed. Requests are
+    restricted by `htmx.config.mode = "same-origin"` (the default; per-element
+    `hx-config` cannot override it). Eval cannot be switched off by config, so
+    avoid `hx-on`, trigger filters and `js:` values under a strict CSP, or use
+    the `hx-csp` extension. Restrict extensions with `htmx.config.extensions`.
+  - Wrap untrusted HTML in `hx-disable` (htmx 2) / `hx-ignore` (htmx 4) as a
+    second layer behind the sanitizer.
 
 ## Development
 

@@ -1,0 +1,61 @@
+package testdata
+
+import t "github.com/a-h/templ"
+
+// 検出漏れの回帰テスト: すべて検出されること (行末コメントは期待するルール)
+templ Evasion(u string, ok bool) {
+	// 属性名の表記揺れ
+	<button onClick={ u }>case</button>                     // js-eval-attr
+	<button data-hx-on:click={ u }>prefix</button>          // js-eval-attr
+	<div data-hx-vals={ u }>prefix vals</div>                 // js-eval-attr
+	// 次の行はテストが -alpine-prefix data-x- を指定して検査する
+	<div data-x-init={ u }>alpine prefix</div>                // js-eval-attr
+	<button hx-on-click={ u }>htmx2 dash</button>           // js-eval-attr
+	<button hx-on--after-request={ u }>htmx2 dash</button>  // js-eval-attr
+	// htmx 4
+	<div hx-vals:inherited={ u }>inherited</div>              // js-eval-attr
+	<div hx-headers:inherited:append={ u }>append</div>       // js-eval-attr
+	<div hx-on={ u }>extended hx-on</div>                     // js-eval-attr
+	<div hx-confirm={ u }>confirm js:</div>                   // js-eval-attr
+	<div hx-action={ u } hx-method="post">action</div>        // url-attr
+	<div hx-query={ u }>query</div>                           // url-attr
+	<div hx-get:inherited={ u }>get inherited</div>           // url-attr
+	<div hx-config={ u }>config</div>                         // unvetted-attr
+	<div hx-status:422={ u }>status</div>                     // unvetted-attr
+	// htmx 2 で JS を評価する属性
+	<div hx-trigger={ u }>trigger filter</div>                // js-eval-attr
+	<div hx-vars={ u }>vars</div>                             // js-eval-attr
+	<div hx-request={ u }>request</div>                       // js-eval-attr
+	<div hx-push-url={ u }>push</div>                         // url-attr
+	// Alpine
+	<div x-bind={ u }>bind object</div>                       // js-eval-attr
+	<div x-id={ u }>id</div>                                  // js-eval-attr
+	<div x-intersect={ u }>plugin</div>                       // js-eval-attr
+	<input x-mask:dynamic={ u }/>                              // js-eval-attr
+	<div
+		if ok {
+			x-init={ u }
+		}
+	>conditional</div>                                         // js-eval-attr
+	// templ が URL をサニタイズしない属性
+	<iframe src={ u }></iframe>                               // unsafe-url-attr
+	<button formaction={ u }>formaction</button>               // unsafe-url-attr
+	<map><area href={ u }/></map>                              // unsafe-url-attr
+	<script src={ u }></script>                               // unsafe-url-attr
+	<iframe srcdoc={ u }></iframe>                            // srcdoc-attr
+	// エスケープ迂回
+	@t.Raw(u)                                                  // escape-bypass
+	{{ f := templ.Raw }}                                       // escape-bypass
+	@f(u)
+	<div style={ templ.SafeCSS(u) }>css</div>                  // escape-bypass
+	// 安全な書き方の抜け道
+	<button onclick={ templ.JSFuncCall(u, "x") }>name</button>  // js-eval-attr
+	<button @click={ templ.JSFuncCall("f", u) }>alpine</button> // js-eval-attr
+	<div hx-trigger={ templ.JSONString(u) }>trigger</div>      // js-eval-attr
+	<button onclick={ templ.ComponentScript{Call: u} }>lit</button> // escape-bypass
+}
+
+// テンプレート外のヘルパー関数
+func helper(u string) templ.Component {
+	return templ.Raw(u) // escape-bypass
+}

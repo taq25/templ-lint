@@ -1,0 +1,15 @@
+package testdata
+
+// -htmx 2 で検査する。行末コメントは期待するルール。
+templ HTMX2(u string, userHTML string) {
+	// htmx 2 に hx-ignore はない: 子孫は htmx に処理される
+	<div hx-ignore>                                           // htmx-disable-semantics
+		@templ.Raw(sanitize.HTML(userHTML))
+	</div>
+	// htmx 2 の正しい使い方
+	<div hx-disable>
+		@templ.Raw(sanitize.HTML(userHTML))
+	</div>
+	// htmx 2 の hx-confirm は確認ダイアログの文言で、評価されない
+	<div hx-confirm={ u }>confirm text</div>
+}

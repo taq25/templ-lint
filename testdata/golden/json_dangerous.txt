@@ -69,7 +69,7 @@
     "col": 7,
     "rule": "js-eval-attr",
     "severity": "ERROR",
-    "message": "dynamic value in \"hx-vals\": Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute"
+    "message": "dynamic value in \"hx-vals\": htmx evaluates this attribute as JavaScript when the value starts with \"js:\" or \"javascript:\"; start the value with a static literal, or pass data via templ.JSONString"
   },
   {
     "file": "testdata/dangerous.templ",
@@ -90,7 +90,7 @@
   {
     "file": "testdata/dangerous.templ",
     "line": 16,
-    "col": 5,
+    "col": 12,
     "rule": "escape-bypass",
     "severity": "ERROR",
     "message": "templ.Raw bypasses escaping; passing a non-literal value risks XSS — sanitize with an allowed sanitizer or use a static literal"

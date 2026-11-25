@@ -110,3 +110,33 @@ func TestUnknownPathExits2(t *testing.T) {
 		t.Error("expected an error message on stderr")
 	}
 }
+
+// -htmx-prefix で指定した接頭辞の属性も hx- として検査する。
+func TestHTMXPrefixFlag(t *testing.T) {
+	dir := t.TempDir()
+	src := "package p\n\ntempl P(u string) {\n\t<div data-boost-vals={ u }>x</div>\n}\n"
+	file := filepath.Join(dir, "p.templ")
+	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{file}, &stdout, &stderr); code != 0 {
+		t.Errorf("without -htmx-prefix: exit = %d, want 0\n%s", code, stdout.String())
+	}
+	stdout.Reset()
+	if code := run([]string{"-htmx-prefix", "data-boost-", file}, &stdout, &stderr); code != 1 {
+		t.Errorf("with -htmx-prefix: exit = %d, want 1\n%s", code, stdout.String())
+	}
+}
+
+// -htmx は 2 か 4 だけを受け付ける。
+func TestHTMXVersionFlagValidation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-htmx", "3", "testdata/safe.templ"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	stderr.Reset()
+	if code := run([]string{"-htmx", "4", "-allow-sanitizer", "sanitize.HTML", "testdata/safe.templ"}, &stdout, &stderr); code != 0 {
+		t.Errorf("exit = %d, want 0 (stderr: %s)", code, stderr.String())
+	}
+}
