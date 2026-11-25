@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -46,6 +47,11 @@ func TestCLIGolden(t *testing.T) {
 			name:     "json_dangerous",
 			args:     []string{"-format", "json", "-allow-sanitizer", "sanitize.HTML", "testdata/dangerous.templ"},
 			wantExit: 1,
+		},
+		{
+			name:     "sarif_elements",
+			args:     []string{"-format", "sarif", "testdata/elements.templ"},
+			wantExit: 0,
 		},
 		{
 			name:     "version",
@@ -155,5 +161,40 @@ func TestCSPFlagValidation(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "csp-inline-handler") {
 		t.Errorf("expected csp-inline-handler warning, got:\n%s", stdout.String())
+	}
+}
+
+func TestFormatFlagValidation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-format", "xml", "testdata/safe.templ"}, &stdout, &stderr); code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+}
+
+// SARIF の結果がルール一覧を正しく指し、パスが %SRCROOT% からの相対 URI になる。
+func TestSARIFOutput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"-format", "sarif", "-allow-sanitizer", "sanitize.HTML", "./testdata/dangerous.templ"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit = %d, want 1 (stderr: %s)", code, stderr.String())
+	}
+	var log sarifLog
+	if err := json.Unmarshal(stdout.Bytes(), &log); err != nil {
+		t.Fatal(err)
+	}
+	if log.Version != "2.1.0" || len(log.Runs) != 1 {
+		t.Fatalf("unexpected log: %+v", log)
+	}
+	sr := log.Runs[0]
+	if len(sr.Results) == 0 {
+		t.Fatal("no results")
+	}
+	for _, r := range sr.Results {
+		if sr.Tool.Driver.Rules[r.RuleIndex].ID != r.RuleID {
+			t.Errorf("ruleIndex %d does not point to %s", r.RuleIndex, r.RuleID)
+		}
+		loc := r.Locations[0].PhysicalLocation.ArtifactLocation
+		if loc.URI != "testdata/dangerous.templ" || loc.URIBaseID != "%SRCROOT%" {
+			t.Errorf("unexpected location %+v", loc)
+		}
 	}
 }

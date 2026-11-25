@@ -44,7 +44,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	)
 	fs := flag.NewFlagSet("templ-lint", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&format, "format", "text", "output format: text | json")
+	fs.StringVar(&format, "format", "text", "output format: text | json | sarif")
 	fs.BoolVar(&strict, "strict", false, "treat WARNING findings as failures too")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.Var(&sanitizers, "allow-sanitizer",
@@ -65,6 +65,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	switch format {
+	case "text", "json", "sarif":
+	default:
+		fmt.Fprintf(stderr, "templ-lint: -format must be text, json or sarif, got %q\n", format)
+		return 2
+	}
 	if csp != lint.CSPNone && csp != lint.CSPStrict {
 		fmt.Fprintf(stderr, "templ-lint: -csp must be \"strict\" or empty, got %q\n", csp)
 		return 2
@@ -94,6 +100,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch format {
+	case "sarif":
+		if err := writeSARIF(stdout, findings); err != nil {
+			fmt.Fprintf(stderr, "templ-lint: %v\n", err)
+			return 2
+		}
 	case "json":
 		if findings == nil {
 			findings = []lint.Finding{}
