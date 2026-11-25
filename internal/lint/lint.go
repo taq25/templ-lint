@@ -360,7 +360,7 @@ func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.E
 				"dynamic URL in <%s %s>: templ does not sanitize URLs in this attribute, so a javascript: URL or an attacker-chosen script runs; wrap the value in templ.URL(...) or use a same-origin relative path",
 				element, raw))
 		}
-		if lower == "srcdoc" && !l.isAllowedHTMLSrc(value.Value) {
+		if lower == "srcdoc" && !l.isAllowedHTMLSrc(tn, value.Value) {
 			add(RuleSrcdocAttr, SeverityError, fmt.Sprintf(
 				"dynamic value in <%s srcdoc>: the browser parses this attribute as an HTML document, so HTML escaping does not prevent XSS; sanitize with an allowed sanitizer",
 				element))

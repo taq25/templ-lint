@@ -137,9 +137,10 @@ func TestLintPathsDirectory(t *testing.T) {
 	// dangerous: 12, safe: 0, suppressed: 2, elements: 3, urlattr: 3,
 	// evasion: 36 (data-x-init は -alpine-prefix なしでは対象外),
 	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない),
-	// csp: 2 (-csp なしではセキュリティの検査だけ), ignores: 4
-	if len(findings) != 65 {
-		t.Errorf("total findings from directory walk: got %d, want 65", len(findings))
+	// csp: 2 (-csp なしではセキュリティの検査だけ), ignores: 4,
+	// sanitizer: 2 (別名の other.HTML と偽の bluemonday)
+	if len(findings) != 67 {
+		t.Errorf("total findings from directory walk: got %d, want 67", len(findings))
 	}
 }
 
@@ -189,6 +190,7 @@ func TestAnnotatedTestdata(t *testing.T) {
 		{"htmx2.templ", &Linter{HTMXVersion: htmxVersion2, AllowedSanitizers: []string{"sanitize.HTML"}}},
 		{"csp.templ", &Linter{CSP: CSPStrict}},
 		{"ignores.templ", &Linter{}},
+		{"sanitizer.templ", &Linter{AllowedSanitizers: []string{"example.com/app/sanitize.HTML"}}},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
@@ -428,6 +430,38 @@ func TestHasNonScriptLiteralPrefix(t *testing.T) {
 	for src, want := range cases {
 		if got := hasNonScriptLiteralPrefix(parser.Expression{Value: src}); got != want {
 			t.Errorf("hasNonScriptLiteralPrefix(%s) = %v, want %v", src, got, want)
+		}
+	}
+}
+
+func TestSplitSanitizer(t *testing.T) {
+	cases := []struct{ in, pkg, fn string }{
+		{"sanitize.HTML", "sanitize", "HTML"},
+		{"example.com/app/sanitize.HTML", "example.com/app/sanitize", "HTML"},
+		{"gopkg.in/x/clean.v2.HTML", "gopkg.in/x/clean.v2", "HTML"},
+		{"HTML", "", ""},
+		{"example.com/app/sanitize", "", ""},
+		{"sanitize.", "", ""},
+	}
+	for _, c := range cases {
+		pkg, fn, _ := splitSanitizer(c.in)
+		if pkg != c.pkg || fn != c.fn {
+			t.Errorf("splitSanitizer(%q) = %q, %q; want %q, %q", c.in, pkg, fn, c.pkg, c.fn)
+		}
+	}
+}
+
+func TestDefaultPackageName(t *testing.T) {
+	cases := map[string]string{
+		"github.com/a-h/templ":               "templ",
+		"github.com/m-mizutani/goerr/v2":     "goerr",
+		"gopkg.in/yaml.v3":                   "yaml",
+		"github.com/microcosm-cc/bluemonday": "bluemonday",
+		"example.com/app/internal/sanitize":  "sanitize",
+	}
+	for in, want := range cases {
+		if got := defaultPackageName(in); got != want {
+			t.Errorf("defaultPackageName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
