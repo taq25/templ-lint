@@ -54,16 +54,24 @@ templ-lint -allow-sanitizer sanitize.HTML ./views
 
 # JSON output; treat warnings as failures
 templ-lint -format json -strict ./views
+
+# Go-style recursive path; SARIF for GitHub code scanning
+templ-lint -format sarif ./... > templ-lint.sarif
 ```
+
+Directories are walked recursively (`./...` works too). `vendor`,
+`node_modules` and hidden directories are skipped unless named directly. `.go`
+files are read only for the `sanitizer-policy` rule (generated `*_templ.go`
+and `*_test.go` are skipped).
 
 | Flag | Description |
 |---|---|
-| `-allow-sanitizer pkg.Func` | Allow `templ.Raw(pkg.Func(x))` etc. Repeatable. |
+| `-allow-sanitizer pkg.Func` | Allow `templ.Raw(pkg.Func(x))` etc. Use the import path form (`example.com/app/sanitize.HTML`) to match only that package, not any package with the same name. Repeatable. |
 | `-htmx-prefix prefix` | Extra prefix htmx treats as `hx-` (`htmx.config.prefix`, e.g. `data-boost-`). `data-hx-` is always recognized. Repeatable. |
 | `-alpine-prefix prefix` | Extra prefix Alpine treats as `x-` (`Alpine.prefix`, e.g. `data-x-`). Not set by default, since `data-x-*` is also an ordinary data attribute. Repeatable. |
 | `-htmx 2\|4` | Target htmx major version. Enables checks whose meaning differs between versions (`hx-disable` / `hx-ignore`; `hx-confirm` only evaluates `js:` in htmx 4). Unset: those checks are skipped or fail safe. |
 | `-csp strict` | Assume a strict Content-Security-Policy (`script-src` without `'unsafe-inline'` / `'unsafe-eval'`) and warn about code it would silently block (`csp-*` rules). Security checks are the same with or without it. |
-| `-format text\|json` | Output format (default `text`). |
+| `-format text\|json\|sarif` | Output format (default `text`). `sarif` is SARIF 2.1.0 for GitHub code scanning. |
 | `-strict` | Exit non-zero on WARNING findings too. |
 | `-version` | Print version and exit. |
 
@@ -86,7 +94,9 @@ Exit codes: `0` no findings / `1` findings (ERROR always; WARNING only with
 | `spread-attr` | Spread attributes (`{ attrs... }`): names and values are decided at runtime | WARNING |
 | `unsafe-target-blank` | `target="_blank"` without `rel="noopener"` — reverse tabnabbing (CWE-1022) | WARNING |
 | `missing-sri` | Cross-origin `<script>` / `<link rel=stylesheet>` without an `integrity` attribute — supply-chain risk (CWE-353) | WARNING |
-| `invalid-ignore` | `templ-lint:ignore` directive without a reason | WARNING |
+| `sanitizer-policy` | bluemonday policies (in `.go` files or `.templ` Go code) that keep attributes the frontend acts on: `AllowDataAttributes()` (htmx treats `data-hx-*` as `hx-*`), `AllowAttrs("onclick" / "x-data" / "@click" / "hx-get" / "data-hx-get" ...)`, `AllowUnsafe(true)` | WARNING |
+| `invalid-ignore` | `templ-lint:ignore` directive without a reason, or naming an unknown rule | WARNING |
+| `unused-ignore` | `templ-lint:ignore` directive that suppresses nothing (rules that cannot fire under the current flags, such as `csp-*` without `-csp strict`, are not reported) | WARNING |
 
 ### CSP compatibility (`-csp strict`)
 
@@ -203,7 +213,15 @@ Do **not** blanket-allow `hx-*` / `x-*` attributes in the policy for
 user-authored HTML — the frontend executes them, which would reintroduce the
 exact XSS this linter prevents. The linter checks the *shape*
 `templ.Raw(sanitize.HTML(x))`; it does **not** verify the policy is correct —
-that is what this wrapper and its tests are for.
+that is what this wrapper and its tests are for. The `sanitizer-policy` rule
+catches the common mistakes (`AllowDataAttributes()`, allowing `on*` / `x-*` /
+`hx-*` attributes, `AllowUnsafe(true)`).
+
+`-allow-sanitizer sanitize.HTML` matches any package whose local name is
+`sanitize`. Prefer `-allow-sanitizer example.com/app/sanitize.HTML`, which is
+checked against the file's imports. The bluemonday chain is also checked
+against imports, so an aliased import (`bm "github.com/microcosm-cc/bluemonday"`)
+works and an unrelated package named `bluemonday` does not.
 
 Note: `p.Sanitize(x)` on a stored policy variable is **not** allowed — the AST
 cannot verify that `p` is a bluemonday policy, and allowing any method named
@@ -221,7 +239,9 @@ as `invalid-ignore` and has no effect.
 ```
 
 HTML comments work too: `<!-- templ-lint:ignore js-eval-attr <reason> -->`.
-Multiple rules can be listed separated by commas.
+Multiple rules can be listed separated by commas. Unknown rule names are
+reported as `invalid-ignore`, and directives that suppress nothing as
+`unused-ignore`, so stale suppressions do not pile up.
 
 ## CI
 
@@ -234,6 +254,16 @@ Multiple rules can be listed separated by commas.
 
 Pin a version tag instead of `@latest` in CI: new lint rules are effectively
 breaking changes for your pipeline.
+
+To show findings in GitHub code scanning, upload SARIF (the job needs
+`permissions: security-events: write`):
+
+```yaml
+- run: go run github.com/taq25/templ-lint@latest -format sarif ./... > templ-lint.sarif || true
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: templ-lint.sarif
+```
 
 ## How it works
 
@@ -257,8 +287,9 @@ passing.
 
 ## Limitations
 
-- Only `.templ` files are scanned. `templ.Raw` calls in handwritten `.go`
-  files are out of scope (pair with a Go-side linter if you need that).
+- Only `.templ` files are scanned for XSS. `.go` files are read only for
+  bluemonday policies; `templ.Raw` calls in handwritten `.go` files are out of
+  scope (pair with a Go-side linter if you need that).
 - No taint tracking: any non-literal argument to `templ.Raw` is flagged unless
   it matches the sanitizer allowlist, even if it was sanitized elsewhere.
 - Static analysis cannot see runtime values; combine with runtime hardening:

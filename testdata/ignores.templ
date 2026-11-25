@@ -1,0 +1,16 @@
+package testdata
+
+// 抑制ディレクティブの検証。行末コメントは期待するルール。
+templ Ignores(u string) {
+	// templ-lint:ignore js-eval-atr typo in the rule name // invalid-ignore
+	<div x-init={ u }>typo: not suppressed</div>              // js-eval-attr
+	// templ-lint:ignore url-attr nothing to suppress here    // unused-ignore
+	<div>static</div>
+	// templ-lint:ignore js-eval-attr,url-attr preset enum     // unused-ignore
+	<div x-init={ u }>only js-eval-attr is used</div>
+	// templ-lint:ignore js-eval-attr preset enum
+	<div x-init={ u }>used</div>
+	// -csp strict を付けないと出ないルールの抑制は、未使用として報告しない
+	// templ-lint:ignore csp-inline-handler legacy widget
+	<button onclick="legacy()">x</button>
+}

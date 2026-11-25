@@ -1,0 +1,26 @@
+package testdata
+
+import (
+	"example.com/app/sanitize"
+	other "example.com/evil/sanitize"
+	bm "github.com/microcosm-cc/bluemonday"
+	bluemonday "example.com/fake/bluemonday"
+)
+
+// -allow-sanitizer example.com/app/sanitize.HTML で検査する。行末コメントは期待するルール。
+templ Sanitizer(u string) {
+	@templ.Raw(sanitize.HTML(u))
+	// 同じ名前の別パッケージは、import パスで指定すれば許可しない
+	@templ.Raw(other.HTML(u))                       // escape-bypass
+	// 別名で import した bluemonday も由来を確認して許可する
+	@templ.Raw(bm.UGCPolicy().Sanitize(u))
+	// bluemonday という名前の別パッケージは許可しない
+	@templ.Raw(bluemonday.UGCPolicy().Sanitize(u))  // escape-bypass
+}
+
+// .templ の中で組み立てたポリシーも検査する
+func strictPolicy() *bm.Policy {
+	p := bm.NewPolicy()
+	p.AllowDataAttributes()                         // sanitizer-policy
+	return p
+}

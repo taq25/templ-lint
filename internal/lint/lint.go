@@ -45,14 +45,22 @@ func (l *Linter) normalizer() AttrNormalizer {
 }
 
 // LintPaths はファイルまたはディレクトリ (再帰的に *.templ を収集) を検査する。
+// .go ファイルは bluemonday のポリシー (sanitizer-policy) だけを検査する。
 func (l *Linter) LintPaths(paths []string) ([]Finding, error) {
-	files, err := collectTemplFiles(paths)
+	templFiles, goFiles, err := collectFiles(paths)
 	if err != nil {
 		return nil, err
 	}
 	var findings []Finding
-	for _, f := range files {
+	for _, f := range templFiles {
 		fs, err := l.LintFile(f)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, fs...)
+	}
+	for _, f := range goFiles {
+		fs, err := l.LintGoFile(f)
 		if err != nil {
 			return nil, err
 		}
@@ -80,7 +88,7 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 		return nil, goerr.Wrap(err, "failed to parse templ file", goerr.V("path", path))
 	}
 	var findings []Finding
-	var ignores []ignoreDirective
+	var ignores []*ignoreDirective
 	tn := collectTemplNames(tf)
 
 	// 属性の検査には要素名が要る (templ が URL をサニタイズするかは要素と属性の組で決まる)。
@@ -190,7 +198,7 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 	if err := tf.Visit(v); err != nil {
 		return nil, goerr.Wrap(err, "failed to visit templ AST", goerr.V("path", path))
 	}
-	return applyIgnores(findings, ignores), nil
+	return l.applyIgnores(path, findings, ignores), nil
 }
 
 // ignoreDirective は理由付き抑制コメント 1 件。
@@ -198,36 +206,52 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 type ignoreDirective struct {
 	fromLine uint32 // 1 始まり
 	toLine   uint32
-	rules    map[string]bool
+	col      uint32
+	rules    []string        // 書かれた順 (未使用の報告を安定させるため)
+	used     map[string]bool // 実際に検出を抑制したルール
 }
 
-func collectIgnore(path, contents string, r parser.Range, ignores *[]ignoreDirective, findings *[]Finding) {
+func collectIgnore(path, contents string, r parser.Range, ignores *[]*ignoreDirective, findings *[]Finding) {
+	collectIgnoreAt(path, contents, r.From.Line+1, r.To.Line+1, r.From.Col+1, ignores, findings)
+}
+
+// collectIgnoreAt は 1 始まりの行・列で抑制ディレクティブを登録する。
+func collectIgnoreAt(path, contents string, fromLine, toLine, col uint32, ignores *[]*ignoreDirective, findings *[]Finding) {
 	m := ignoreDirectivePattern.FindStringSubmatch(contents)
 	if m == nil {
 		return
 	}
+	add := func(msg string) {
+		*findings = append(*findings, Finding{
+			File: path, Line: fromLine, Col: col,
+			Rule: RuleInvalidIgnore, Severity: SeverityWarning, Message: msg,
+		})
+	}
 	reason := strings.TrimSpace(m[2])
 	if reason == "" {
 		// 理由のない抑制は無効化し、それ自体を報告する
-		*findings = append(*findings, Finding{
-			File: path, Line: r.From.Line + 1, Col: r.From.Col + 1,
-			Rule: RuleInvalidIgnore, Severity: SeverityWarning,
-			Message: "templ-lint:ignore requires a reason (templ-lint:ignore <rule> <why it is safe>); directive is ineffective without one",
-		})
+		add("templ-lint:ignore requires a reason (templ-lint:ignore <rule> <why it is safe>); directive is ineffective without one")
 		return
 	}
-	rules := map[string]bool{}
+	d := &ignoreDirective{fromLine: fromLine, toLine: toLine, col: col, used: map[string]bool{}}
 	for _, id := range strings.Split(m[1], ",") {
-		rules[strings.TrimSpace(id)] = true
+		id = strings.TrimSpace(id)
+		if !IsKnownRule(id) {
+			// 綴り間違いの抑制は黙って何もしないので、それ自体を報告する
+			add(fmt.Sprintf("templ-lint:ignore names unknown rule %q; it suppresses nothing", id))
+			continue
+		}
+		if !slices.Contains(d.rules, id) {
+			d.rules = append(d.rules, id)
+		}
 	}
-	*ignores = append(*ignores, ignoreDirective{
-		fromLine: r.From.Line + 1,
-		toLine:   r.To.Line + 1,
-		rules:    rules,
-	})
+	if len(d.rules) > 0 {
+		*ignores = append(*ignores, d)
+	}
 }
 
-func applyIgnores(findings []Finding, ignores []ignoreDirective) []Finding {
+// applyIgnores は抑制された検出を取り除き、何も抑制しなかったディレクティブを報告する。
+func (l *Linter) applyIgnores(path string, findings []Finding, ignores []*ignoreDirective) []Finding {
 	if len(ignores) == 0 {
 		return findings
 	}
@@ -237,16 +261,45 @@ func applyIgnores(findings []Finding, ignores []ignoreDirective) []Finding {
 			kept = append(kept, f)
 		}
 	}
+	for _, d := range ignores {
+		for _, id := range d.rules {
+			if d.used[id] || !l.ruleActive(id) {
+				continue
+			}
+			kept = append(kept, Finding{
+				File: path, Line: d.fromLine, Col: d.col,
+				Rule: RuleUnusedIgnore, Severity: SeverityWarning,
+				Message: fmt.Sprintf("templ-lint:ignore %s suppresses nothing on this or the next line; remove it", id),
+			})
+		}
+	}
 	return kept
 }
 
-func suppressed(f Finding, ignores []ignoreDirective) bool {
+func suppressed(f Finding, ignores []*ignoreDirective) bool {
+	hit := false
 	for _, d := range ignores {
-		if d.rules[f.Rule] && f.Line >= d.fromLine && f.Line <= d.toLine+1 {
-			return true
+		if slices.Contains(d.rules, f.Rule) && f.Line >= d.fromLine && f.Line <= d.toLine+1 {
+			d.used[f.Rule] = true
+			hit = true
 		}
 	}
-	return false
+	return hit
+}
+
+// ruleActive は現在の設定でルールが検出を出し得るかを返す。
+// 設定次第で出ないルール (-csp strict 専用など) の抑制は、未使用として報告しない。
+func (l *Linter) ruleActive(id string) bool {
+	switch id {
+	case RuleCSPInlineHandler, RuleCSPEvalAttr, RuleCSPInlineScript:
+		return l.CSP == CSPStrict
+	case RuleHTMXDisableSemantics:
+		return l.HTMXVersion != htmxVersionUnknown
+	case RuleInvalidIgnore, RuleUnusedIgnore:
+		// ディレクティブ自体の検出は抑制の対象にならない
+		return false
+	}
+	return true
 }
 
 func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.ExpressionAttribute, findings *[]Finding) {
@@ -315,7 +368,7 @@ func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.E
 				"dynamic URL in <%s %s>: templ does not sanitize URLs in this attribute, so a javascript: URL or an attacker-chosen script runs; wrap the value in templ.URL(...) or use a same-origin relative path",
 				element, raw))
 		}
-		if lower == "srcdoc" && !l.isAllowedHTMLSrc(value.Value) {
+		if lower == "srcdoc" && !l.isAllowedHTMLSrc(tn, value.Value) {
 			add(RuleSrcdocAttr, SeverityError, fmt.Sprintf(
 				"dynamic value in <%s srcdoc>: the browser parses this attribute as an HTML document, so HTML escaping does not prevent XSS; sanitize with an allowed sanitizer",
 				element))
@@ -325,29 +378,86 @@ func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.E
 	l.checkGoSnippet(path, tn, n.Expression, findings)
 }
 
-func collectTemplFiles(paths []string) ([]string, error) {
-	var files []string
+// collectFiles は引数のファイル・ディレクトリ・glob から *.templ と *.go を集める。
+// .go は templ の生成コード (*_templ.go) とテスト (*_test.go) を除く。
+//
+//   - "./..." や "views/..." のような Go 流の指定は、そのディレクトリ以下の再帰と同じ
+//   - ディレクトリをたどるときは vendor / node_modules / 隠しディレクトリ (.git など) に
+//     入らない (引数で直接指定したディレクトリは、名前にかかわらずたどる)
+func collectFiles(paths []string) (templFiles, goFiles []string, err error) {
+	seen := map[string]bool{}
 	for _, p := range paths {
+		p = trimRecursiveSuffix(p)
 		matches, err := filepath.Glob(p)
 		if err != nil || len(matches) == 0 {
 			matches = []string{p}
 		}
-		for _, m := range matches {
-			if err := filepath.WalkDir(m, func(path string, d fs.DirEntry, err error) error {
+		for _, root := range matches {
+			if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return goerr.Wrap(err, "failed to walk directory", goerr.V("path", path))
 				}
-				if !d.IsDir() && strings.HasSuffix(path, ".templ") {
-					files = append(files, path)
+				if d.IsDir() {
+					if path != root && skipDir(d.Name()) {
+						return filepath.SkipDir
+					}
+					return nil
 				}
+				if seen[path] {
+					return nil
+				}
+				switch {
+				case strings.HasSuffix(path, ".templ"):
+					templFiles = append(templFiles, path)
+				case isLintableGoFile(path):
+					goFiles = append(goFiles, path)
+				default:
+					return nil
+				}
+				seen[path] = true
 				return nil
 			}); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 	}
-	if len(files) == 0 {
-		return nil, goerr.New("no .templ files found", goerr.V("paths", paths))
+	// パスの指定間違いで黙って 0 件にならないよう、.templ が 1 つもなければエラーにする
+	// (.go ファイルだけを明示的に指定した場合を除く)。
+	if len(templFiles) == 0 && (len(goFiles) == 0 || !allGoFiles(paths)) {
+		return nil, nil, goerr.New("no .templ files found", goerr.V("paths", paths))
 	}
-	return files, nil
+	return templFiles, goFiles, nil
+}
+
+func allGoFiles(paths []string) bool {
+	for _, p := range paths {
+		if !strings.HasSuffix(p, ".go") {
+			return false
+		}
+	}
+	return true
+}
+
+// collectTemplFiles は collectFiles のうち *.templ だけを返す。
+func collectTemplFiles(paths []string) ([]string, error) {
+	files, _, err := collectFiles(paths)
+	return files, err
+}
+
+// trimRecursiveSuffix は "./..." / "dir/..." を "." / "dir" にする。
+func trimRecursiveSuffix(p string) string {
+	if p != "..." && !strings.HasSuffix(p, "/...") && !strings.HasSuffix(p, string(filepath.Separator)+"...") {
+		return p
+	}
+	p = strings.TrimSuffix(p, "...")
+	p = strings.TrimRight(p, "/"+string(filepath.Separator))
+	if p == "" {
+		return "."
+	}
+	return p
+}
+
+// skipDir はディレクトリをたどるときに入らないディレクトリ名か判定する。
+func skipDir(name string) bool {
+	return name == "vendor" || name == "node_modules" || (strings.HasPrefix(name, ".") && name != "." && name != "..")
 }

@@ -2,7 +2,9 @@ package lint
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,9 +138,12 @@ func TestLintPathsDirectory(t *testing.T) {
 	}
 	// dangerous: 12, safe: 0, suppressed: 2, elements: 3, urlattr: 3,
 	// evasion: 36 (data-x-init は -alpine-prefix なしでは対象外),
-	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない)
-	if len(findings) != 61 {
-		t.Errorf("total findings from directory walk: got %d, want 61", len(findings))
+	// htmx4: 2, htmx2: 1 (-htmx なしではバージョン依存の検査をしない),
+	// csp: 2 (-csp なしではセキュリティの検査だけ), ignores: 4,
+	// sanitizer: 3 (別名の other.HTML と偽の bluemonday、AllowDataAttributes),
+	// policy/*.go: 5 (sanitizer-policy)
+	if len(findings) != 73 {
+		t.Errorf("total findings from directory walk: got %d, want 73", len(findings))
 	}
 }
 
@@ -187,6 +192,8 @@ func TestAnnotatedTestdata(t *testing.T) {
 		{"htmx4.templ", &Linter{HTMXVersion: htmxVersion4, AllowedSanitizers: []string{"sanitize.HTML"}}},
 		{"htmx2.templ", &Linter{HTMXVersion: htmxVersion2, AllowedSanitizers: []string{"sanitize.HTML"}}},
 		{"csp.templ", &Linter{CSP: CSPStrict}},
+		{"ignores.templ", &Linter{}},
+		{"sanitizer.templ", &Linter{AllowedSanitizers: []string{"example.com/app/sanitize.HTML"}}},
 	}
 	for _, c := range cases {
 		t.Run(c.file, func(t *testing.T) {
@@ -277,6 +284,42 @@ var knownRules = map[string]bool{
 	RuleUnvettedAttr: true, RuleUnsafeURLAttr: true, RuleSrcdocAttr: true,
 	RuleHTMXConfigMeta: true, RuleHTMXDisableSemantics: true,
 	RuleCSPInlineHandler: true, RuleCSPEvalAttr: true, RuleCSPInlineScript: true,
+	RuleUnusedIgnore: true, RuleSanitizerPolicy: true,
+}
+
+// knownRules (テストの注釈で使えるルール) と Rules (公開するルール一覧) を一致させる。
+func TestRulesRegistry(t *testing.T) {
+	if len(Rules) != len(knownRules) {
+		t.Errorf("Rules has %d entries, knownRules has %d", len(Rules), len(knownRules))
+	}
+	for _, r := range Rules {
+		if !knownRules[r.ID] {
+			t.Errorf("rule %s is missing from knownRules", r.ID)
+		}
+		if r.Description == "" || (r.Severity != SeverityError && r.Severity != SeverityWarning) {
+			t.Errorf("rule %s: incomplete entry %+v", r.ID, r)
+		}
+	}
+}
+
+// 未使用の抑制は、そのルールが有効な設定のときだけ報告する。
+func TestUnusedIgnoreRespectsConfig(t *testing.T) {
+	findings, err := (&Linter{CSP: CSPStrict}).LintFile("../../testdata/ignores.templ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, f := range findings {
+		if f.Rule == RuleUnusedIgnore {
+			n++
+		}
+		if f.Rule == RuleCSPInlineHandler {
+			t.Errorf("csp-inline-handler should be suppressed: %+v", f)
+		}
+	}
+	if n != 2 {
+		t.Errorf("unused-ignore: got %d, want 2", n)
+	}
 }
 
 // -csp を指定しなければ CSP の互換性の検査は行わない (セキュリティの検査だけが残る)。
@@ -391,5 +434,131 @@ func TestHasNonScriptLiteralPrefix(t *testing.T) {
 		if got := hasNonScriptLiteralPrefix(parser.Expression{Value: src}); got != want {
 			t.Errorf("hasNonScriptLiteralPrefix(%s) = %v, want %v", src, got, want)
 		}
+	}
+}
+
+func TestSplitSanitizer(t *testing.T) {
+	cases := []struct{ in, pkg, fn string }{
+		{"sanitize.HTML", "sanitize", "HTML"},
+		{"example.com/app/sanitize.HTML", "example.com/app/sanitize", "HTML"},
+		{"gopkg.in/x/clean.v2.HTML", "gopkg.in/x/clean.v2", "HTML"},
+		{"HTML", "", ""},
+		{"example.com/app/sanitize", "", ""},
+		{"sanitize.", "", ""},
+	}
+	for _, c := range cases {
+		pkg, fn, _ := splitSanitizer(c.in)
+		if pkg != c.pkg || fn != c.fn {
+			t.Errorf("splitSanitizer(%q) = %q, %q; want %q, %q", c.in, pkg, fn, c.pkg, c.fn)
+		}
+	}
+}
+
+func TestDefaultPackageName(t *testing.T) {
+	cases := map[string]string{
+		"github.com/a-h/templ":               "templ",
+		"github.com/m-mizutani/goerr/v2":     "goerr",
+		"gopkg.in/yaml.v3":                   "yaml",
+		"github.com/microcosm-cc/bluemonday": "bluemonday",
+		"example.com/app/internal/sanitize":  "sanitize",
+	}
+	for in, want := range cases {
+		if got := defaultPackageName(in); got != want {
+			t.Errorf("defaultPackageName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCollectTemplFilesSkipsDirs(t *testing.T) {
+	root := t.TempDir()
+	for _, f := range []string{
+		"views/a.templ",
+		"views/vendor/b.templ",
+		"node_modules/pkg/c.templ",
+		".git/d.templ",
+		"views/.cache/e.templ",
+		"views/sub/f.templ",
+	} {
+		p := filepath.Join(root, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("package x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{
+		filepath.Join(root, "views", "a.templ"),
+		filepath.Join(root, "views", "sub", "f.templ"),
+	}
+	for _, arg := range []string{root, root + "/...", filepath.Join(root, "views") + "/..."} {
+		got, err := collectTemplFiles([]string{arg, arg}) // 重複した指定は 1 回だけ数える
+		if err != nil {
+			t.Fatalf("%s: %v", arg, err)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: got %v, want %v", arg, got, want)
+		}
+	}
+	// 直接指定した vendor ディレクトリはたどる
+	got, err := collectTemplFiles([]string{filepath.Join(root, "views", "vendor")})
+	if err != nil || len(got) != 1 {
+		t.Errorf("explicit vendor dir: got %v, %v", got, err)
+	}
+}
+
+func TestTrimRecursiveSuffix(t *testing.T) {
+	cases := map[string]string{
+		"./...":     ".",
+		"...":       ".",
+		"views/...": "views",
+		"views":     "views",
+		"a...b":     "a...b",
+	}
+	for in, want := range cases {
+		if got := trimRecursiveSuffix(in); got != want {
+			t.Errorf("trimRecursiveSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLintGoFilePolicy(t *testing.T) {
+	path := "../../testdata/policy/policy.go"
+	findings, err := (&Linter{}).LintGoFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := expectedRulesByLine(t, path)
+	got := map[uint32][]string{}
+	for _, f := range findings {
+		got[f.Line] = append(got[f.Line], f.Rule)
+	}
+	for line, rule := range want {
+		if len(got[line]) != 1 || got[line][0] != rule {
+			t.Errorf("line %d: got %v, want [%s]", line, got[line], rule)
+		}
+	}
+	for line, rules := range got {
+		if _, ok := want[line]; !ok {
+			t.Errorf("line %d: unexpected findings %v", line, rules)
+		}
+	}
+
+	other, err := (&Linter{}).LintGoFile("../../testdata/policy/notbluemonday.go")
+	if err != nil || len(other) != 0 {
+		t.Errorf("file without bluemonday: got %v, %v", other, err)
+	}
+}
+
+// .go ファイルだけを明示した場合は .templ がなくてもエラーにしない。
+// ディレクトリに .templ がない場合は、指定間違いを疑ってエラーにする。
+func TestLintPathsGoOnly(t *testing.T) {
+	l := &Linter{}
+	findings, err := l.LintPaths([]string{"../../testdata/policy/policy.go"})
+	if err != nil || len(findings) != 5 {
+		t.Errorf("explicit .go file: got %d findings, err %v", len(findings), err)
+	}
+	if _, err := l.LintPaths([]string{"../../testdata/policy"}); err == nil {
+		t.Error("directory without .templ files: want error")
 	}
 }

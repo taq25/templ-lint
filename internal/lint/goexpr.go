@@ -17,16 +17,20 @@ const templImportPath = "github.com/a-h/templ"
 // 生成コードが常に templ を import するので "templ" は必ず含まれ、
 // import t "github.com/a-h/templ" のような別名もここに加わる。
 // dot import (import . "github.com/a-h/templ") の場合は dot が true になる。
+// imports はファイル内の import の「ローカル名 → import パス」(-allow-sanitizer の
+// import パス指定と bluemonday の由来の確認に使う)。
 type templNames struct {
-	names map[string]bool
-	dot   bool
+	names   map[string]bool
+	dot     bool
+	imports map[string]string
 }
 
 func defaultTemplNames() templNames {
-	return templNames{names: map[string]bool{"templ": true}}
+	return templNames{names: map[string]bool{"templ": true}, imports: map[string]string{}}
 }
 
-// collectTemplNames は .templ ファイル内の Go コード (import 文) から templ の別名を集める。
+// collectTemplNames は .templ ファイル内の Go コード (import 文) から templ の別名と
+// import の一覧を集める。
 func collectTemplNames(tf *parser.TemplateFile) templNames {
 	tn := defaultTemplNames()
 	var srcs []string
@@ -43,21 +47,83 @@ func collectTemplNames(tf *parser.TemplateFile) templNames {
 		if err != nil {
 			continue
 		}
-		for _, imp := range f.Imports {
-			path, err := strconv.Unquote(imp.Path.Value)
-			if err != nil || path != templImportPath || imp.Name == nil {
-				continue
-			}
-			switch imp.Name.Name {
-			case ".":
-				tn.dot = true
-			case "_":
-			default:
-				tn.names[imp.Name.Name] = true
-			}
-		}
+		tn.addImports(f.Imports)
 	}
 	return tn
+}
+
+func (tn templNames) addImports(imports []*goast.ImportSpec) {
+	for _, imp := range imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		local := defaultPackageName(path)
+		if imp.Name != nil {
+			local = imp.Name.Name
+		}
+		switch local {
+		case ".":
+			if path == templImportPath {
+				tn.dot = true
+			}
+			continue
+		case "_":
+			continue
+		}
+		tn.imports[local] = path
+		if path == templImportPath {
+			tn.names[local] = true
+		}
+	}
+}
+
+// defaultPackageName は別名なしの import で使われるパッケージ名を import パスから推定する。
+// 型情報なしでは正確には分からないので、Go の慣習 (最後の要素、/v2 などの
+// メジャーバージョンと gopkg.in の .v3 は除く) に従う。外れた場合は許可されない側
+// (検知を維持する側) に倒れるので、別名を付けた import で回避できる。
+func defaultPackageName(path string) string {
+	parts := strings.Split(path, "/")
+	name := parts[len(parts)-1]
+	if len(parts) > 1 && isMajorVersion(name) {
+		name = parts[len(parts)-2]
+	}
+	if i := strings.Index(name, ".v"); i > 0 && isMajorVersion(name[i+1:]) {
+		name = name[:i]
+	}
+	return name
+}
+
+func isMajorVersion(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// importsPath はファイルが指定の import パスを import しているかを返す。
+func (tn templNames) importsPath(path string) bool {
+	for _, p := range tn.imports {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+// importedFrom は識別子が指定の import パスのパッケージを指すかを返す。
+// import の一覧にない識別子は判定できないので known=false を返す。
+func (tn templNames) importedFrom(name, path string) (match, known bool) {
+	p, ok := tn.imports[name]
+	if !ok {
+		return false, false
+	}
+	return p == path, true
 }
 
 // templFunc は式が templ パッケージの関数 (templ.X / 別名.X / dot import の X) なら X を返す。
@@ -233,6 +299,15 @@ func (l *Linter) checkGoSnippet(path string, tn templNames, expr parser.Expressi
 			Message: msg,
 		})
 	}
+	if tn.importsPath(bluemondayImportPath) {
+		l.checkSanitizerPolicy(snip.root, func(pos token.Pos, msg string) {
+			line, col := snip.position(expr.Range, pos)
+			*findings = append(*findings, Finding{
+				File: path, Line: line, Col: col,
+				Rule: RuleSanitizerPolicy, Severity: SeverityWarning, Message: msg,
+			})
+		})
+	}
 	called := map[goast.Expr]bool{}
 	goast.Inspect(snip.root, func(node goast.Node) bool {
 		switch n := node.(type) {
@@ -242,7 +317,7 @@ func (l *Linter) checkGoSnippet(path string, tn templNames, expr parser.Expressi
 				return true
 			}
 			called[n.Fun] = true
-			if len(n.Args) > 0 && l.isAllowedArg(n.Args[0]) {
+			if len(n.Args) > 0 && l.isAllowedArg(tn, n.Args[0]) {
 				return true
 			}
 			report(n.Pos(), fmt.Sprintf(
@@ -275,8 +350,10 @@ func (l *Linter) checkGoSnippet(path string, tn templNames, expr parser.Expressi
 	})
 }
 
+const bluemondayImportPath = "github.com/microcosm-cc/bluemonday"
+
 // isAllowedArg はエスケープバイパス関数の引数として許可される形かを判定する。
-func (l *Linter) isAllowedArg(arg goast.Expr) bool {
+func (l *Linter) isAllowedArg(tn templNames, arg goast.Expr) bool {
 	// 静的な文字列リテラル (とその連結) は開発者が書いたものなので許可
 	if isConstantString(arg) {
 		return true
@@ -294,22 +371,56 @@ func (l *Linter) isAllowedArg(arg goast.Expr) bool {
 	if sel.Sel.Name == "Sanitize" {
 		if inner, ok := sel.X.(*goast.CallExpr); ok {
 			if innerSel, ok := inner.Fun.(*goast.SelectorExpr); ok {
-				if pkg, ok := innerSel.X.(*goast.Ident); ok && pkg.Name == "bluemonday" {
+				if pkg, ok := innerSel.X.(*goast.Ident); ok && tn.isBluemonday(pkg.Name) {
 					return true
 				}
 			}
 		}
 	}
-	// 設定された許可リスト ("pkg.Func" 形式のサニタイズラッパー)
-	if pkg, ok := sel.X.(*goast.Ident); ok {
-		qualified := pkg.Name + "." + sel.Sel.Name
-		for _, allowed := range l.AllowedSanitizers {
-			if strings.TrimSpace(allowed) == qualified {
+	// 設定された許可リスト ("pkg.Func" または "import/path.Func" 形式のサニタイズラッパー)
+	pkg, ok := sel.X.(*goast.Ident)
+	if !ok {
+		return false
+	}
+	for _, allowed := range l.AllowedSanitizers {
+		path, fn, ok := splitSanitizer(allowed)
+		if !ok || fn != sel.Sel.Name {
+			continue
+		}
+		if strings.Contains(path, "/") || strings.Contains(path, ".") {
+			// import パス指定: ファイル内の import と突き合わせるので、同名の別パッケージを
+			// 誤って許可しない
+			if match, _ := tn.importedFrom(pkg.Name, path); match {
 				return true
 			}
+			continue
+		}
+		if pkg.Name == path {
+			return true
 		}
 	}
 	return false
+}
+
+// isBluemonday は識別子が bluemonday パッケージを指すかを返す。import の一覧に
+// ないときは (従来どおり) 名前で判断し、別のパッケージを指しているなら許可しない。
+func (tn templNames) isBluemonday(name string) bool {
+	if match, known := tn.importedFrom(name, bluemondayImportPath); known {
+		return match
+	}
+	return name == "bluemonday"
+}
+
+// splitSanitizer は "pkg.Func" / "example.com/x/sanitize.Func" を
+// パッケージ (名前または import パス) と関数名に分ける。
+func splitSanitizer(s string) (pkg, fn string, ok bool) {
+	s = strings.TrimSpace(s)
+	slash := strings.LastIndex(s, "/")
+	dot := strings.LastIndex(s, ".")
+	if dot <= slash || dot <= 0 || dot == len(s)-1 {
+		return "", "", false
+	}
+	return s[:dot], s[dot+1:], true
 }
 
 // componentScriptIsConstant は ComponentScript リテラルの JS を出力するフィールドが
@@ -400,7 +511,7 @@ func isTemplCall(tn templNames, src, fn string) bool {
 }
 
 // isAllowedHTMLSrc は式が許可されたサニタイザ呼び出し (srcdoc に入れてよい HTML) か判定する。
-func (l *Linter) isAllowedHTMLSrc(src string) bool {
+func (l *Linter) isAllowedHTMLSrc(tn templNames, src string) bool {
 	e, err := goparser.ParseExpr(src)
-	return err == nil && l.isAllowedArg(e)
+	return err == nil && l.isAllowedArg(tn, e)
 }
