@@ -14,3 +14,23 @@ templ Safe(name string, userHTML string, userURL string) {
 	@templ.Raw(sanitize.HTML(userHTML))
 	<a href={ templ.URL(userURL) }>ok</a>
 }
+
+// 正規化・許可リスト化で誤検知しないこと
+templ SafeAttrs(id string, name string, userURL string) {
+	<div hx-target={ "#row-" + id } hx-swap="outerHTML">selector</div>
+	<div hx-include={ "#form-" + id } hx-indicator={ "#spin-" + id }>selector</div>
+	<div hx-confirm={ "Delete " + name + "?" }>confirm text</div>
+	<div hx-vals={ `{"id": "` + id + `"}` }>json literal prefix</div>
+	<div hx-get={ "/items/" + id }>relative</div>
+	<div x-init={ "load()" }>constant string</div>
+	<div x-transition:enter={ "ease-out " + name }>classes</div>
+	<div x-ref={ name }>ref</div>
+	<input x-mask={ name }/>
+	<iframe src={ templ.URL(userURL) }></iframe>
+	<iframe src={ "/embed/" + id }></iframe>
+	<a href={ userURL }>templ sanitizes a[href]</a>
+	<form action={ userURL }>templ sanitizes form[action]</form>
+	<img src={ userURL }/>
+	<div data-x-offset={ name }>ordinary data attribute</div>
+	@templ.Raw("<b>" + "static" + "</b>")
+}

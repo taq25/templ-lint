@@ -28,4 +28,7 @@ const (
 	RuleTabnabbing    = "unsafe-target-blank" // target=_blank に rel=noopener がない
 	RuleMissingSRI    = "missing-sri"         // 外部リソースに integrity 属性がない
 	RuleInvalidIgnore = "invalid-ignore"      // 理由のない templ-lint:ignore ディレクティブ
+	RuleUnvettedAttr  = "unvetted-attr"       // 安全性を確認していない htmx 属性への動的値
+	RuleUnsafeURLAttr = "unsafe-url-attr"     // templ が URL サニタイズしない属性への動的 URL
+	RuleSrcdocAttr    = "srcdoc-attr"         // iframe srcdoc (HTML として解釈される) への動的値
 )

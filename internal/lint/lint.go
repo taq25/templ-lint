@@ -25,6 +25,15 @@ type Linter struct {
 	// ("pkg.Func" 形式、例: "sanitize.HTML")。
 	// bluemonday.XxxPolicy().Sanitize(x) チェーンは常に許可される。
 	AllowedSanitizers []string
+	// HTMXPrefixes は hx- と同じ意味を持つ追加の属性接頭辞 (htmx.config.prefix)。
+	// "data-hx-" は常に有効。
+	HTMXPrefixes []string
+	// AlpinePrefixes は x- と同じ意味を持つ追加の属性接頭辞 (Alpine.prefix)。
+	AlpinePrefixes []string
+}
+
+func (l *Linter) normalizer() AttrNormalizer {
+	return AttrNormalizer{HTMXPrefixes: l.HTMXPrefixes, AlpinePrefixes: l.AlpinePrefixes}
 }
 
 // LintPaths はファイルまたはディレクトリ (再帰的に *.templ を収集) を検査する。
@@ -64,6 +73,12 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 	}
 	var findings []Finding
 	var ignores []ignoreDirective
+	tn := collectTemplNames(tf)
+
+	// 属性の検査には要素名が要る (templ が URL をサニタイズするかは要素と属性の組で決まる)。
+	// visitor は要素の属性を子要素より先に訪れるので、要素に入った時点の名前を覚えておけば
+	// その要素の属性 (条件付き属性の中身を含む) を訪れる間は正しい要素名になる。
+	var element string
 
 	v := visitor.New()
 
@@ -83,19 +98,26 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 	// 要素レベルの規則: reverse tabnabbing, SRI 欠如
 	prevElement := v.Element
 	v.Element = func(n *parser.Element) error {
+		element = strings.ToLower(n.Name)
 		l.checkElement(path, n, &findings)
 		return prevElement(n)
 	}
 	prevScriptElement := v.ScriptElement
 	v.ScriptElement = func(n *parser.ScriptElement) error {
+		element = "script"
 		l.checkScript(path, n, &findings)
 		return prevScriptElement(n)
+	}
+	prevRawElement := v.RawElement
+	v.RawElement = func(n *parser.RawElement) error {
+		element = strings.ToLower(n.Name)
+		return prevRawElement(n)
 	}
 
 	// 動的な属性値: <div x-init={ expr }> など
 	prevExprAttr := v.ExpressionAttribute
 	v.ExpressionAttribute = func(n *parser.ExpressionAttribute) error {
-		l.checkAttribute(path, n, &findings)
+		l.checkAttribute(path, element, tn, n, &findings)
 		return prevExprAttr(n)
 	}
 
@@ -126,23 +148,30 @@ func (l *Linter) LintFile(path string) ([]Finding, error) {
 	// .templ 内の Go 式/コード片に含まれる templ.Raw 等
 	prevTemplElem := v.TemplElementExpression
 	v.TemplElementExpression = func(n *parser.TemplElementExpression) error {
-		l.checkGoSnippet(path, n.Expression, &findings)
+		l.checkGoSnippet(path, tn, n.Expression, &findings)
 		return prevTemplElem(n)
 	}
 	prevCallTempl := v.CallTemplateExpression
 	v.CallTemplateExpression = func(n *parser.CallTemplateExpression) error {
-		l.checkGoSnippet(path, n.Expression, &findings)
+		l.checkGoSnippet(path, tn, n.Expression, &findings)
 		return prevCallTempl(n)
 	}
 	prevGoCode := v.GoCode
 	v.GoCode = func(n *parser.GoCode) error {
-		l.checkGoSnippet(path, n.Expression, &findings)
+		l.checkGoSnippet(path, tn, n.Expression, &findings)
 		return prevGoCode(n)
 	}
 	prevStringExpr := v.StringExpression
 	v.StringExpression = func(n *parser.StringExpression) error {
-		l.checkGoSnippet(path, n.Expression, &findings)
+		l.checkGoSnippet(path, tn, n.Expression, &findings)
 		return prevStringExpr(n)
+	}
+
+	// テンプレートの外に書いた Go コード (ヘルパー関数など) の templ.Raw 等
+	prevGoExpr := v.TemplateFileGoExpression
+	v.TemplateFileGoExpression = func(n *parser.TemplateFileGoExpression) error {
+		l.checkGoSnippet(path, tn, n.Expression, &findings)
+		return prevGoExpr(n)
 	}
 
 	if err := tf.Visit(v); err != nil {
@@ -207,7 +236,7 @@ func suppressed(f Finding, ignores []ignoreDirective) bool {
 	return false
 }
 
-func (l *Linter) checkAttribute(path string, n *parser.ExpressionAttribute, findings *[]Finding) {
+func (l *Linter) checkAttribute(path, element string, tn templNames, n *parser.ExpressionAttribute, findings *[]Finding) {
 	// 属性名が動的 ({ name }={ value }) な場合は名前ごと危険
 	if _, ok := n.Key.(parser.ExpressionAttributeKey); ok {
 		*findings = append(*findings, Finding{
@@ -217,30 +246,61 @@ func (l *Linter) checkAttribute(path string, n *parser.ExpressionAttribute, find
 		})
 		return
 	}
-	name := n.Key.String()
-	switch {
-	case jsEvalAttrPattern.MatchString(name):
+	raw := n.Key.String()
+	add := func(rule string, sev Severity, msg string) {
 		*findings = append(*findings, Finding{
 			File: path, Line: n.Range.From.Line + 1, Col: n.Range.From.Col + 1,
-			Rule: RuleJSEvalAttr, Severity: SeverityError,
-			Message: fmt.Sprintf(
-				"dynamic value in %q: Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute",
-				name),
+			Rule: rule, Severity: sev, Message: msg,
 		})
-	case urlAttrPattern.MatchString(name):
-		// 相対パス (自オリジン確定) は外部送信の心配がないので除外する。
-		if !isSameOriginRelativeURL(n.Expression) {
-			*findings = append(*findings, Finding{
-				File: path, Line: n.Range.From.Line + 1, Col: n.Range.From.Col + 1,
-				Rule: RuleURLAttr, Severity: SeverityWarning,
-				Message: fmt.Sprintf(
+	}
+
+	// { "..." } のように文字列リテラルだけでできた値は、開発者がテンプレートに書いた
+	// 静的な値なので属性値の規則の対象外 (属性値の Go 式内の templ.Raw 等は下で検査する)。
+	if !isConstantStringSrc(n.Expression.Value) {
+		value := n.Expression
+		switch classifyAttr(l.normalizer().Normalize(raw)) {
+		case attrJSEval:
+			add(RuleJSEvalAttr, SeverityError, fmt.Sprintf(
+				"dynamic value in %q: Alpine.js/htmx evaluate this attribute as JavaScript, so HTML escaping does not prevent XSS; use a static expression, or pass data via templ.JSONString into a data-* attribute",
+				raw))
+		case attrJSEvalPrefixed:
+			// 先頭が js: になり得ない ("Delete " + name など) なら評価されない
+			if !hasNonScriptLiteralPrefix(value) {
+				add(RuleJSEvalAttr, SeverityError, fmt.Sprintf(
+					"dynamic value in %q: htmx evaluates this attribute as JavaScript when the value starts with \"js:\" or \"javascript:\"; start the value with a static literal, or pass data via templ.JSONString",
+					raw))
+			}
+		case attrRequestURL:
+			// 相対パス (自オリジン確定) は外部送信の心配がないので除外する。
+			if !isSameOriginRelativeURL(value) {
+				add(RuleURLAttr, SeverityWarning, fmt.Sprintf(
 					"dynamic URL in %q: htmx will send a request to this URL; validate it against an allowlist server-side",
-					name),
-			})
+					raw))
+			}
+		case attrUnvetted:
+			add(RuleUnvettedAttr, SeverityWarning, fmt.Sprintf(
+				"dynamic value in %q: templ-lint does not know whether htmx evaluates this attribute; check the htmx docs and use a static value or suppress with a reason",
+				raw))
+		}
+
+		lower := strings.ToLower(raw)
+		if isUnsanitizedURLAttr(element, lower) &&
+			!isSameOriginRelativeURL(value) &&
+			!isTemplCall(tn, value.Value, "URL") &&
+			// templ.SafeURL(x) は escape-bypass で報告するので二重に出さない
+			!isTemplCall(tn, value.Value, "SafeURL") {
+			add(RuleUnsafeURLAttr, SeverityError, fmt.Sprintf(
+				"dynamic URL in <%s %s>: templ does not sanitize URLs in this attribute, so a javascript: URL or an attacker-chosen script runs; wrap the value in templ.URL(...) or use a same-origin relative path",
+				element, raw))
+		}
+		if lower == "srcdoc" && !l.isAllowedHTMLSrc(value.Value) {
+			add(RuleSrcdocAttr, SeverityError, fmt.Sprintf(
+				"dynamic value in <%s srcdoc>: the browser parses this attribute as an HTML document, so HTML escaping does not prevent XSS; sanitize with an allowed sanitizer",
+				element))
 		}
 	}
 	// 属性値の Go 式内の templ.SafeURL(x) 等も検査する
-	l.checkGoSnippet(path, n.Expression, findings)
+	l.checkGoSnippet(path, tn, n.Expression, findings)
 }
 
 func collectTemplFiles(paths []string) ([]string, error) {
